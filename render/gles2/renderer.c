@@ -423,6 +423,9 @@ static uint32_t gles2_preferred_read_format(
 
 	pop_gles2_debug(renderer);
 
+	if (gl_format == GL_BGRA_EXT && !renderer->exts.EXT_read_format_bgra) {
+		gl_format = GL_RGBA;
+	}
 	const struct wlr_gles2_pixel_format *fmt =
 		get_gles2_format_from_gl(gl_format, gl_type, alpha_size > 0);
 	if (fmt != NULL) {
