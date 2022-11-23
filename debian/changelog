@@ -1,8 +1,14 @@
-wlroots (0.16.0-1) UNRELEASED; urgency=medium
+wlroots (0.16.0-1) experimental; urgency=medium
 
-  * New upstream release
+  * Upload to experimental
+  * [aac440c] New upstream release
+  * [e8cf5bd] d/gbp.conf: Use upstream-vcs
+  * [bea6239] d/watch: Project moved to fdo gitlab
+  * [e7033ad] Adjust to new soname
+  * [b9ef4e6] d/control: Update build-dependencies
+  * [5054262] Refresh patches. Drop those applied upstream.
 
- -- Guido Günther <agx@sigxcpu.org>  Wed, 23 Nov 2022 15:10:43 +0100
+ -- Guido Günther <agx@sigxcpu.org>  Wed, 23 Nov 2022 16:20:46 +0100
 
 wlroots (0.15.1-3) unstable; urgency=medium
 
