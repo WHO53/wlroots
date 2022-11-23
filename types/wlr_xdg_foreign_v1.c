@@ -6,7 +6,6 @@
 #include <wlr/types/wlr_xdg_foreign_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
-#include "util/signal.h"
 #include "xdg-foreign-unstable-v1-protocol.h"
 
 #define FOREIGN_V1_VERSION 1
@@ -28,35 +27,34 @@ static void xdg_imported_handle_destroy(struct wl_client *client,
 	wl_resource_destroy(resource);
 }
 
-static bool verify_is_toplevel(struct wl_resource *client_resource,
+static struct wlr_xdg_toplevel *verify_is_toplevel(struct wl_resource *resource,
 		struct wlr_surface *surface) {
-	if (wlr_surface_is_xdg_surface(surface)) {
-		struct wlr_xdg_surface *xdg_surface =
-			wlr_xdg_surface_from_wlr_surface(surface);
-		if (xdg_surface == NULL || xdg_surface->role != WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
-			wl_resource_post_error(client_resource, -1,
-					"surface must be an xdg_toplevel");
-			return false;
-		}
-	} else {
-		wl_resource_post_error(client_resource, -1,
-				"surface must be an xdg_surface");
-		return false;
+	if (!wlr_surface_is_xdg_surface(surface)) {
+		wl_resource_post_error(resource, -1, "surface must be an xdg_surface");
+		return NULL;
 	}
-	return true;
+
+	struct wlr_xdg_surface *xdg_surface =
+		wlr_xdg_surface_from_wlr_surface(surface);
+	if (xdg_surface == NULL || xdg_surface->role != WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
+		wl_resource_post_error(resource, -1, "surface must be an xdg_toplevel");
+		return NULL;
+	}
+
+	return xdg_surface->toplevel;
 }
 
 static void destroy_imported_child(struct wlr_xdg_imported_child_v1 *child) {
 	wl_list_remove(&child->xdg_toplevel_set_parent.link);
-	wl_list_remove(&child->xdg_surface_unmap.link);
+	wl_list_remove(&child->xdg_surface_destroy.link);
 	wl_list_remove(&child->link);
 	free(child);
 }
 
-static void handle_child_xdg_surface_unmap(
+static void handle_child_xdg_surface_destroy(
 		struct wl_listener *listener, void *data) {
 	struct wlr_xdg_imported_child_v1 *child =
-		wl_container_of(listener, child, xdg_surface_unmap);
+		wl_container_of(listener, child, xdg_surface_destroy);
 	destroy_imported_child(child);
 }
 
@@ -79,9 +77,20 @@ static void xdg_imported_handle_set_parent_of(struct wl_client *client,
 	struct wlr_surface *wlr_surface_child =
 		wlr_surface_from_resource(child_resource);
 
-	if (!verify_is_toplevel(resource, wlr_surface_child)) {
+	struct wlr_xdg_toplevel *child_toplevel =
+		verify_is_toplevel(resource, wlr_surface_child);
+	if (!child_toplevel) {
 		return;
 	}
+
+	struct wlr_xdg_surface *surface =
+		wlr_xdg_surface_from_wlr_surface(wlr_surface);
+
+	if (!surface->mapped) {
+		wlr_xdg_toplevel_set_parent(child_toplevel, NULL);
+		return;
+	}
+
 	struct wlr_xdg_imported_child_v1 *child;
 	wl_list_for_each(child, &imported->children, link) {
 		if (child->surface == wlr_surface_child) {
@@ -95,18 +104,21 @@ static void xdg_imported_handle_set_parent_of(struct wl_client *client,
 		return;
 	}
 	child->surface = wlr_surface_child;
-	child->xdg_surface_unmap.notify = handle_child_xdg_surface_unmap;
+	child->xdg_surface_destroy.notify = handle_child_xdg_surface_destroy;
 	child->xdg_toplevel_set_parent.notify = handle_xdg_toplevel_set_parent;
 
-	struct wlr_xdg_surface *surface =
-		wlr_xdg_surface_from_wlr_surface(wlr_surface);
-	struct wlr_xdg_surface *surface_child =
-		wlr_xdg_surface_from_wlr_surface(wlr_surface_child);
+	if (!wlr_xdg_toplevel_set_parent(child_toplevel, surface->toplevel)) {
+		wl_resource_post_error(surface->toplevel->resource,
+			XDG_TOPLEVEL_ERROR_INVALID_PARENT,
+			"a toplevel cannot be a parent of itself or its ancestor");
+		free(child);
+		return;
+	}
 
-	wlr_xdg_toplevel_set_parent(surface_child, surface);
-	wl_signal_add(&surface_child->events.unmap,
-			&child->xdg_surface_unmap);
-	wl_signal_add(&surface_child->toplevel->events.set_parent,
+	wlr_xdg_toplevel_set_parent(child_toplevel, surface->toplevel);
+	wl_signal_add(&child_toplevel->base->events.destroy,
+			&child->xdg_surface_destroy);
+	wl_signal_add(&child_toplevel->events.set_parent,
 			&child->xdg_toplevel_set_parent);
 
 	wl_list_insert(&imported->children, &child->link);
@@ -151,10 +163,7 @@ static void destroy_imported(struct wlr_xdg_imported_v1 *imported) {
 	wl_list_for_each_safe(child, child_tmp, &imported->children, link) {
 		struct wlr_xdg_surface *xdg_child =
 			wlr_xdg_surface_from_wlr_surface(child->surface);
-
-		if (xdg_child != NULL) {
-			wlr_xdg_toplevel_set_parent(xdg_child, NULL);
-		}
+		wlr_xdg_toplevel_set_parent(xdg_child->toplevel, NULL);
 	}
 
 	wl_list_remove(&imported->exported_destroyed.link);
@@ -201,7 +210,9 @@ static void xdg_exporter_handle_export(struct wl_client *wl_client,
 		xdg_foreign_from_exporter_resource(client_resource);
 	struct wlr_surface *surface = wlr_surface_from_resource(surface_resource);
 
-	if (!verify_is_toplevel(client_resource, surface)) {
+	struct wlr_xdg_toplevel *xdg_toplevel =
+		verify_is_toplevel(client_resource, surface);
+	if (!xdg_toplevel) {
 		return;
 	}
 
@@ -236,9 +247,7 @@ static void xdg_exporter_handle_export(struct wl_client *wl_client,
 	zxdg_exported_v1_send_handle(exported->resource, exported->base.handle);
 
 	exported->xdg_surface_destroy.notify = handle_xdg_surface_destroy;
-	struct wlr_xdg_surface *xdg_surface =
-		wlr_xdg_surface_from_wlr_surface(surface);
-	wl_signal_add(&xdg_surface->events.unmap, &exported->xdg_surface_destroy);
+	wl_signal_add(&xdg_toplevel->base->events.destroy, &exported->xdg_surface_destroy);
 }
 
 static const struct zxdg_exporter_v1_interface xdg_exporter_impl = {
@@ -358,7 +367,7 @@ static void xdg_foreign_destroy(struct wlr_xdg_foreign_v1 *foreign) {
 		return;
 	}
 
-	wlr_signal_emit_safe(&foreign->events.destroy, NULL);
+	wl_signal_emit_mutable(&foreign->events.destroy, NULL);
 	wl_list_remove(&foreign->foreign_registry_destroy.link);
 	wl_list_remove(&foreign->display_destroy.link);
 

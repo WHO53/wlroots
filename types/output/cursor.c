@@ -3,13 +3,13 @@
 #include <stdlib.h>
 #include <wlr/interfaces/wlr_output.h>
 #include <wlr/render/wlr_renderer.h>
+#include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_matrix.h>
-#include <wlr/types/wlr_surface.h>
 #include <wlr/util/log.h>
 #include "render/allocator/allocator.h"
 #include "render/swapchain.h"
+#include "types/wlr_buffer.h"
 #include "types/wlr_output.h"
-#include "util/signal.h"
 
 static bool output_set_hardware_cursor(struct wlr_output *output,
 		struct wlr_buffer *buffer, int hotspot_x, int hotspot_y) {
@@ -167,7 +167,7 @@ static void output_cursor_damage_whole(struct wlr_output_cursor *cursor) {
 		.output = cursor->output,
 		.damage = &damage,
 	};
-	wlr_signal_emit_safe(&cursor->output->events.damage, &event);
+	wl_signal_emit_mutable(&cursor->output->events.damage, &event);
 
 	pixman_region32_fini(&damage);
 }
@@ -220,7 +220,7 @@ static struct wlr_drm_format *output_pick_cursor_format(struct wlr_output *outpu
 		display_formats =
 			output->impl->get_cursor_formats(output, allocator->buffer_caps);
 		if (display_formats == NULL) {
-			wlr_log(WLR_ERROR, "Failed to get cursor display formats");
+			wlr_log(WLR_DEBUG, "Failed to get cursor display formats");
 			return NULL;
 		}
 	}
@@ -266,7 +266,7 @@ static struct wlr_buffer *render_cursor_buffer(struct wlr_output_cursor *cursor)
 		struct wlr_drm_format *format =
 			output_pick_cursor_format(output);
 		if (format == NULL) {
-			wlr_log(WLR_ERROR, "Failed to pick cursor format");
+			wlr_log(WLR_DEBUG, "Failed to pick cursor format");
 			return NULL;
 		}
 
@@ -351,7 +351,7 @@ static bool output_cursor_attempt_hardware(struct wlr_output_cursor *cursor) {
 	if (texture != NULL) {
 		buffer = render_cursor_buffer(cursor);
 		if (buffer == NULL) {
-			wlr_log(WLR_ERROR, "Failed to render cursor buffer");
+			wlr_log(WLR_DEBUG, "Failed to render cursor buffer");
 			return false;
 		}
 	}
@@ -375,28 +375,50 @@ static bool output_cursor_attempt_hardware(struct wlr_output_cursor *cursor) {
 bool wlr_output_cursor_set_image(struct wlr_output_cursor *cursor,
 		const uint8_t *pixels, int32_t stride, uint32_t width, uint32_t height,
 		int32_t hotspot_x, int32_t hotspot_y) {
+	struct wlr_buffer *buffer = NULL;
+
+	if (pixels) {
+		struct wlr_readonly_data_buffer *ro_buffer = readonly_data_buffer_create(
+			DRM_FORMAT_ARGB8888, stride, width, height, pixels);
+		if (ro_buffer == NULL) {
+			return false;
+		}
+		buffer = &ro_buffer->base;
+	}
+	bool ok = wlr_output_cursor_set_buffer(cursor, buffer, hotspot_x, hotspot_y);
+
+	wlr_buffer_drop(buffer);
+	return ok;
+}
+
+bool wlr_output_cursor_set_buffer(struct wlr_output_cursor *cursor,
+		struct wlr_buffer *buffer, int32_t hotspot_x, int32_t hotspot_y) {
 	struct wlr_renderer *renderer = cursor->output->renderer;
 	if (!renderer) {
-		// if the backend has no renderer, we can't draw a cursor, but this is
-		// actually okay, for ex. with the noop backend
-		return true;
+		return false;
 	}
 
 	output_cursor_reset(cursor);
 
-	cursor->width = width;
-	cursor->height = height;
+	if (buffer != NULL) {
+		cursor->width = buffer->width;
+		cursor->height = buffer->height;
+	} else {
+		cursor->width = 0;
+		cursor->height = 0;
+	}
+
 	cursor->hotspot_x = hotspot_x;
 	cursor->hotspot_y = hotspot_y;
+
 	output_cursor_update_visible(cursor);
 
 	wlr_texture_destroy(cursor->texture);
 	cursor->texture = NULL;
 
 	cursor->enabled = false;
-	if (pixels != NULL) {
-		cursor->texture = wlr_texture_from_pixels(renderer,
-			DRM_FORMAT_ARGB8888, stride, width, height, pixels);
+	if (buffer != NULL) {
+		cursor->texture = wlr_texture_from_buffer(renderer, buffer);
 		if (cursor->texture == NULL) {
 			return false;
 		}
@@ -547,7 +569,6 @@ struct wlr_output_cursor *wlr_output_cursor_create(struct wlr_output *output) {
 		return NULL;
 	}
 	cursor->output = output;
-	wl_signal_init(&cursor->events.destroy);
 	wl_list_init(&cursor->surface_commit.link);
 	cursor->surface_commit.notify = output_cursor_handle_commit;
 	wl_list_init(&cursor->surface_destroy.link);
@@ -562,7 +583,6 @@ void wlr_output_cursor_destroy(struct wlr_output_cursor *cursor) {
 		return;
 	}
 	output_cursor_reset(cursor);
-	wlr_signal_emit_safe(&cursor->events.destroy, cursor);
 	if (cursor->output->hardware_cursor == cursor) {
 		// If this cursor was the hardware cursor, disable it
 		output_set_hardware_cursor(cursor->output, NULL, 0, 0);

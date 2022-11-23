@@ -12,6 +12,8 @@ wlroots reads these environment variables
   renderers: gles2, pixman, vulkan)
 * *WLR_RENDER_DRM_DEVICE*: specifies the DRM node to use for
   hardware-accelerated renderers.
+* *WLR_EGL_NO_MODIFIERS*: set to 1 to disable format modifiers in EGL, this can
+  be used to understand and work around driver bugs.
 
 ## DRM backend
 
@@ -44,6 +46,16 @@ wlroots reads these environment variables
 
 * *WLR_RENDERER_ALLOW_SOFTWARE*: allows the gles2 renderer to use software
   rendering
+
+## scenes
+
+* *WLR_SCENE_DEBUG_DAMAGE*: specifies debug options for screen damage related
+  tasks for compositors that use scenes (available options: none, rerender,
+  highlight)
+* *WLR_SCENE_DISABLE_DIRECT_SCANOUT*: disables direct scan-out for debugging.
+* *WLR_SCENE_DISABLE_VISIBILITY*: If set to 1, the visibility of all scene nodes
+  will be considered to be the full node. Intelligent visibility canculations will
+  be disabled.
 
 # Generic
 

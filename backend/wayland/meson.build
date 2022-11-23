@@ -1,5 +1,5 @@
 wayland_client = dependency('wayland-client',
-	fallback: ['wayland', 'wayland_client_dep'],
+	fallback: 'wayland',
 	default_options: wayland_project_options,
 )
 wlr_deps += wayland_client
@@ -8,6 +8,7 @@ wlr_files += files(
 	'backend.c',
 	'output.c',
 	'seat.c',
+	'pointer.c',
 	'tablet_v2.c',
 )
 

@@ -1,9 +1,9 @@
 project(
 	'wlroots',
 	'c',
-	version: '0.15.1',
+	version: '0.16.0',
 	license: 'MIT',
-	meson_version: '>=0.58.1',
+	meson_version: '>=0.59.0',
 	default_options: [
 		'c_std=c11',
 		'warning_level=2',
@@ -15,10 +15,10 @@ project(
 # necessary for bugfix releases. Increasing soversion is required because
 # wlroots never guarantees ABI stability -- only API stability is guaranteed
 # between minor releases.
-soversion = 10
+soversion = 11
 
-little_endian = host_machine.endian() == 'little'
-big_endian = host_machine.endian() == 'big'
+little_endian = target_machine.endian() == 'little'
+big_endian = target_machine.endian() == 'big'
 
 add_project_arguments([
 	'-DWLR_USE_UNSTABLE',
@@ -92,40 +92,41 @@ features = {
 	'xwayland': false,
 	'gles2-renderer': false,
 	'vulkan-renderer': false,
+	'gbm-allocator': false,
 }
 internal_features = {
 	'xcb-errors': false,
+	'egl': false,
 }
 
 wayland_project_options = ['tests=false', 'documentation=false']
 wayland_server = dependency('wayland-server',
-	version: '>=1.20',
-	fallback: ['wayland', 'wayland_server_dep'],
+	version: '>=1.21',
+	fallback: 'wayland',
 	default_options: wayland_project_options,
 )
 
 drm = dependency('libdrm',
-	version: '>=2.4.109',
-	fallback: ['libdrm', 'ext_libdrm'],
+	version: '>=2.4.113',
+	fallback: 'libdrm',
 	default_options: [
-		'libkms=false',
-		'intel=false',
-		'radeon=false',
-		'amdgpu=false',
-		'nouveau=false',
-		'vmwgfx=false',
-		'omap=false',
-		'exynos=false',
-		'freedreno=false',
-		'tegra=false',
-		'vc4=false',
-		'etnaviv=false',
-		'cairo-tests=false',
-		'man-pages=false',
-		'valgrind=false',
+		'intel=disabled',
+		'radeon=disabled',
+		'amdgpu=disabled',
+		'nouveau=disabled',
+		'vmwgfx=disabled',
+		'omap=disabled',
+		'exynos=disabled',
+		'freedreno=disabled',
+		'tegra=disabled',
+		'vc4=disabled',
+		'etnaviv=disabled',
+		'cairo-tests=disabled',
+		'man-pages=disabled',
+		'valgrind=disabled',
+		'tests=false',
 	],
 )
-gbm = dependency('gbm', version: '>=17.1.0')
 xkbcommon = dependency('xkbcommon')
 udev = dependency('libudev')
 pixman = dependency('pixman-1')
@@ -136,7 +137,6 @@ wlr_files = []
 wlr_deps = [
 	wayland_server,
 	drm,
-	gbm,
 	xkbcommon,
 	udev,
 	pixman,
@@ -169,7 +169,7 @@ symbols_file = 'wlroots.syms'
 symbols_flag = '-Wl,--version-script,@0@/@1@'.format(meson.current_source_dir(), symbols_file)
 lib_wlr = library(
 	meson.project_name(), wlr_files,
-	soversion: soversion,
+	soversion: soversion.to_string(),
 	dependencies: wlr_deps,
 	include_directories: [wlr_inc, proto_inc],
 	install: true,

@@ -17,6 +17,8 @@
 
 struct wlr_gles2_pixel_format {
 	uint32_t drm_format;
+	// optional field, if empty then internalformat = format
+	GLint gl_internalformat;
 	GLint gl_format, gl_type;
 	bool has_alpha;
 };
@@ -45,6 +47,7 @@ struct wlr_gles2_renderer {
 		bool OES_egl_image;
 		bool EXT_texture_type_2_10_10_10_REV;
 		bool OES_texture_half_float_linear;
+		bool EXT_texture_norm16;
 	} exts;
 
 	struct {
@@ -123,8 +126,6 @@ struct wlr_gles2_renderer *gles2_get_renderer(
 struct wlr_gles2_texture *gles2_get_texture(
 	struct wlr_texture *wlr_texture);
 
-struct wlr_texture *gles2_texture_from_wl_drm(struct wlr_renderer *wlr_renderer,
-	struct wl_resource *data);
 struct wlr_texture *gles2_texture_from_buffer(struct wlr_renderer *wlr_renderer,
 	struct wlr_buffer *buffer);
 void gles2_texture_destroy(struct wlr_gles2_texture *texture);

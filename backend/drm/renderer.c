@@ -48,31 +48,6 @@ void finish_drm_renderer(struct wlr_drm_renderer *renderer) {
 	wlr_renderer_destroy(renderer->wlr_rend);
 }
 
-bool init_drm_surface(struct wlr_drm_surface *surf,
-		struct wlr_drm_renderer *renderer, uint32_t width, uint32_t height,
-		const struct wlr_drm_format *drm_format) {
-	if (surf->width == width && surf->height == height) {
-		return true;
-	}
-
-	surf->renderer = renderer;
-	surf->width = width;
-	surf->height = height;
-
-	wlr_swapchain_destroy(surf->swapchain);
-	surf->swapchain = NULL;
-
-	surf->swapchain = wlr_swapchain_create(renderer->allocator, width, height,
-			drm_format);
-	if (surf->swapchain == NULL) {
-		wlr_log(WLR_ERROR, "Failed to create swapchain");
-		memset(surf, 0, sizeof(*surf));
-		return false;
-	}
-
-	return true;
-}
-
 static void finish_drm_surface(struct wlr_drm_surface *surf) {
 	if (!surf || !surf->renderer) {
 		return;
@@ -83,32 +58,57 @@ static void finish_drm_surface(struct wlr_drm_surface *surf) {
 	memset(surf, 0, sizeof(*surf));
 }
 
+bool init_drm_surface(struct wlr_drm_surface *surf,
+		struct wlr_drm_renderer *renderer, int width, int height,
+		const struct wlr_drm_format *drm_format) {
+	if (surf->swapchain != NULL && surf->swapchain->width == width &&
+			surf->swapchain->height == height) {
+		return true;
+	}
+
+	finish_drm_surface(surf);
+
+	surf->swapchain = wlr_swapchain_create(renderer->allocator, width, height,
+			drm_format);
+	if (surf->swapchain == NULL) {
+		wlr_log(WLR_ERROR, "Failed to create swapchain");
+		return false;
+	}
+
+	surf->renderer = renderer;
+
+	return true;
+}
+
 struct wlr_buffer *drm_surface_blit(struct wlr_drm_surface *surf,
 		struct wlr_buffer *buffer) {
 	struct wlr_renderer *renderer = surf->renderer->wlr_rend;
 
-	if (surf->width != (uint32_t)buffer->width ||
-			surf->height != (uint32_t)buffer->height) {
+	if (surf->swapchain->width != buffer->width ||
+			surf->swapchain->height != buffer->height) {
 		wlr_log(WLR_ERROR, "Surface size doesn't match buffer size");
 		return NULL;
 	}
 
 	struct wlr_texture *tex = wlr_texture_from_buffer(renderer, buffer);
 	if (tex == NULL) {
+		wlr_log(WLR_ERROR, "Failed to import source buffer into multi-GPU renderer");
 		return NULL;
 	}
 
 	struct wlr_buffer *dst = wlr_swapchain_acquire(surf->swapchain, NULL);
 	if (!dst) {
+		wlr_log(WLR_ERROR, "Failed to acquire multi-GPU swapchain buffer");
 		wlr_texture_destroy(tex);
 		return NULL;
 	}
 
 	float mat[9];
 	wlr_matrix_identity(mat);
-	wlr_matrix_scale(mat, surf->width, surf->height);
+	wlr_matrix_scale(mat, surf->swapchain->width, surf->swapchain->height);
 
 	if (!wlr_renderer_begin_with_buffer(renderer, dst)) {
+		wlr_log(WLR_ERROR, "Failed to bind multi-GPU destination buffer");
 		wlr_buffer_unlock(dst);
 		wlr_texture_destroy(tex);
 		return NULL;

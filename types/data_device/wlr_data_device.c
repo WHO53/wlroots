@@ -4,11 +4,11 @@
 #include <strings.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
+#include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/util/log.h>
 #include "types/wlr_data_device.h"
-#include "util/signal.h"
 
 #define DATA_DEVICE_MANAGER_VERSION 3
 
@@ -161,7 +161,7 @@ void wlr_seat_request_set_selection(struct wlr_seat *seat,
 		.source = source,
 		.serial = serial,
 	};
-	wlr_signal_emit_safe(&seat->events.request_set_selection, &event);
+	wl_signal_emit_mutable(&seat->events.request_set_selection, &event);
 }
 
 static void seat_handle_selection_source_destroy(
@@ -178,7 +178,7 @@ static void seat_handle_selection_source_destroy(
 		seat_client_send_selection(focused_client);
 	}
 
-	wlr_signal_emit_safe(&seat->events.set_selection, seat);
+	wl_signal_emit_mutable(&seat->events.set_selection, seat);
 }
 
 void wlr_seat_set_selection(struct wlr_seat *seat,
@@ -210,7 +210,7 @@ void wlr_seat_set_selection(struct wlr_seat *seat,
 		seat_client_send_selection(focused_client);
 	}
 
-	wlr_signal_emit_safe(&seat->events.set_selection, seat);
+	wl_signal_emit_mutable(&seat->events.set_selection, seat);
 }
 
 
@@ -279,7 +279,7 @@ static void data_device_manager_bind(struct wl_client *client,
 static void handle_display_destroy(struct wl_listener *listener, void *data) {
 	struct wlr_data_device_manager *manager =
 		wl_container_of(listener, manager, display_destroy);
-	wlr_signal_emit_safe(&manager->events.destroy, manager);
+	wl_signal_emit_mutable(&manager->events.destroy, manager);
 	wl_list_remove(&manager->display_destroy.link);
 	wl_global_destroy(manager->global);
 	free(manager);

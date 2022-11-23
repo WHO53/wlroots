@@ -46,11 +46,6 @@ static struct wlr_pixman_texture *get_texture(
 	return (struct wlr_pixman_texture *)wlr_texture;
 }
 
-static bool texture_is_opaque(struct wlr_texture *wlr_texture) {
-	struct wlr_pixman_texture *texture = get_texture(wlr_texture);
-	return !texture->format_info->has_alpha;
-}
-
 static void texture_destroy(struct wlr_texture *wlr_texture) {
 	struct wlr_pixman_texture *texture = get_texture(wlr_texture);
 	wl_list_remove(&texture->link);
@@ -61,7 +56,6 @@ static void texture_destroy(struct wlr_texture *wlr_texture) {
 }
 
 static const struct wlr_texture_impl texture_impl = {
-	.is_opaque = texture_is_opaque,
 	.destroy = texture_destroy,
 };
 
@@ -463,7 +457,7 @@ static uint32_t pixman_preferred_read_format(
 }
 
 static bool pixman_read_pixels(struct wlr_renderer *wlr_renderer,
-		uint32_t drm_format, uint32_t *flags, uint32_t stride,
+		uint32_t drm_format, uint32_t stride,
 		uint32_t width, uint32_t height, uint32_t src_x, uint32_t src_y,
 		uint32_t dst_x, uint32_t dst_y, void *data) {
 	struct wlr_pixman_renderer *renderer = get_renderer(wlr_renderer);
@@ -528,7 +522,9 @@ struct wlr_renderer *wlr_pixman_renderer_create(void) {
 
 	for (size_t i = 0; i < len; ++i) {
 		wlr_drm_format_set_add(&renderer->drm_formats, formats[i],
-				DRM_FORMAT_MOD_INVALID);
+			DRM_FORMAT_MOD_INVALID);
+		wlr_drm_format_set_add(&renderer->drm_formats, formats[i],
+			DRM_FORMAT_MOD_LINEAR);
 	}
 
 	return &renderer->wlr_renderer;

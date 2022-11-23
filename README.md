@@ -32,9 +32,8 @@ to implement yourself.
 Check out our [wiki] to get started with wlroots. Join our IRC channel:
 [#sway-devel on Libera Chat].
 
-wlroots is developed under the direction of the [sway] project. A variety of
-[wrapper libraries] are available for using it with your favorite programming
-language.
+A variety of [wrapper libraries] are available for using it with your favorite
+programming language.
 
 ## Building
 
@@ -46,12 +45,13 @@ Install dependencies:
 * EGL and GLESv2 (optional, for the GLES2 renderer)
 * Vulkan loader, headers and glslang (optional, for the Vulkan renderer)
 * libdrm
-* GBM
+* GBM (optional, for the GBM allocator)
 * libinput (optional, for the libinput backend)
 * xkbcommon
 * udev
 * pixman
 * [libseat]
+* [hwdata] (optional, for the DRM backend)
 
 If you choose to enable X11 support:
 
@@ -77,7 +77,7 @@ See [CONTRIBUTING.md].
 [Wayland]: https://wayland.freedesktop.org/
 [wiki]: https://gitlab.freedesktop.org/wlroots/wlroots/-/wikis/Getting-started
 [#sway-devel on Libera Chat]: https://web.libera.chat/gamja/?channels=#sway-devel
-[Sway]: https://github.com/swaywm/sway
 [wrapper libraries]: https://gitlab.freedesktop.org/wlroots/wlroots/-/wikis/Projects-which-use-wlroots#wrapper-libraries
 [libseat]: https://git.sr.ht/~kennylevinsen/seatd
+[hwdata]: https://github.com/vcrhonek/hwdata
 [CONTRIBUTING.md]: https://gitlab.freedesktop.org/wlroots/wlroots/-/blob/master/CONTRIBUTING.md

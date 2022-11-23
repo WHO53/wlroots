@@ -6,6 +6,11 @@
 #error "Add -DWLR_USE_UNSTABLE to enable unstable wlroots features"
 #endif
 
+/*
+ * NOTE: wlr/types/wlr_output_damage.h is deprecated and will be removed in
+ * the next release. Use wlr/types/wlr_damage_ring.h instead.
+ */
+
 #ifndef WLR_TYPES_WLR_OUTPUT_DAMAGE_H
 #define WLR_TYPES_WLR_OUTPUT_DAMAGE_H
 
@@ -29,9 +34,9 @@ struct wlr_box;
  * to submit a new frame.
  *
  * To render a new frame, compositors should call
- * `wlr_output_damage_attach_render`, render and call `wlr_output_commit`. No
+ * wlr_output_damage_attach_render(), render and call wlr_output_commit(). No
  * rendering should happen outside a `frame` event handler or before
- * `wlr_output_damage_attach_render`.
+ * wlr_output_damage_attach_render().
  */
 struct wlr_output_damage {
 	struct wlr_output *output;
@@ -43,8 +48,6 @@ struct wlr_output_damage {
 	pixman_region32_t previous[WLR_OUTPUT_DAMAGE_PREVIOUS_LEN];
 	size_t previous_idx;
 
-	bool pending_attach_render;
-
 	struct {
 		struct wl_signal frame;
 		struct wl_signal destroy;
@@ -55,7 +58,6 @@ struct wlr_output_damage {
 	struct wl_listener output_needs_frame;
 	struct wl_listener output_damage;
 	struct wl_listener output_frame;
-	struct wl_listener output_precommit;
 	struct wl_listener output_commit;
 };
 
@@ -64,7 +66,7 @@ void wlr_output_damage_destroy(struct wlr_output_damage *output_damage);
 /**
  * Attach the renderer's buffer to the output. Compositors must call this
  * function before rendering. After they are done rendering, they should call
- * `wlr_output_set_damage` and `wlr_output_commit` to submit the new frame.
+ * wlr_output_set_damage() and wlr_output_commit() to submit the new frame.
  *
  * `needs_frame` will be set to true if a frame should be submitted. `damage`
  * will be set to the region of the output that needs to be repainted, in

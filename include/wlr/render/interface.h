@@ -40,7 +40,7 @@ struct wlr_renderer_impl {
 		struct wlr_renderer *renderer);
 	uint32_t (*preferred_read_format)(struct wlr_renderer *renderer);
 	bool (*read_pixels)(struct wlr_renderer *renderer, uint32_t fmt,
-		uint32_t *flags, uint32_t stride, uint32_t width, uint32_t height,
+		uint32_t stride, uint32_t width, uint32_t height,
 		uint32_t src_x, uint32_t src_y, uint32_t dst_x, uint32_t dst_y,
 		void *data);
 	void (*destroy)(struct wlr_renderer *renderer);
@@ -54,11 +54,8 @@ void wlr_renderer_init(struct wlr_renderer *renderer,
 	const struct wlr_renderer_impl *impl);
 
 struct wlr_texture_impl {
-	bool (*is_opaque)(struct wlr_texture *texture);
-	bool (*write_pixels)(struct wlr_texture *texture,
-		uint32_t stride, uint32_t width, uint32_t height,
-		uint32_t src_x, uint32_t src_y, uint32_t dst_x, uint32_t dst_y,
-		const void *data);
+	bool (*update_from_buffer)(struct wlr_texture *texture,
+		struct wlr_buffer *buffer, pixman_region32_t *damage);
 	void (*destroy)(struct wlr_texture *texture);
 };
 

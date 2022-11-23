@@ -6,19 +6,18 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <wayland-util.h>
+#include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_input_method_v2.h>
-#include <wlr/types/wlr_surface.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 #include "input-method-unstable-v2-protocol.h"
 #include "util/shm.h"
-#include "util/signal.h"
+
+// Note: zwp_input_popup_surface_v2 and zwp_input_method_keyboard_grab_v2 objects
+// become inert when the corresponding zwp_input_method_v2 is destroyed
 
 static const struct zwp_input_method_v2_interface input_method_impl;
 static const struct zwp_input_method_keyboard_grab_v2_interface keyboard_grab_impl;
-
-static void popup_surface_destroy(
-	struct wlr_input_popup_surface_v2 *popup_surface);
 
 static struct wlr_input_method_v2 *input_method_from_resource(
 		struct wl_resource *resource) {
@@ -39,9 +38,9 @@ static void input_method_destroy(struct wlr_input_method_v2 *input_method) {
 	struct wlr_input_popup_surface_v2 *popup_surface, *tmp;
 	wl_list_for_each_safe(
 			popup_surface, tmp, &input_method->popup_surfaces, link) {
-		popup_surface_destroy(popup_surface);
+		wlr_surface_destroy_role_object(popup_surface->surface);
 	}
-	wlr_signal_emit_safe(&input_method->events.destroy, input_method);
+	wl_signal_emit_mutable(&input_method->events.destroy, input_method);
 	wl_list_remove(wl_resource_get_link(input_method->resource));
 	wl_list_remove(&input_method->seat_client_destroy.link);
 	wlr_input_method_keyboard_grab_v2_destroy(input_method->keyboard_grab);
@@ -76,7 +75,7 @@ static void im_commit(struct wl_client *client, struct wl_resource *resource,
 	input_method->current_serial = serial;
 	struct wlr_input_method_v2_state default_state = {0};
 	input_method->pending = default_state;
-	wlr_signal_emit_safe(&input_method->events.commit, (void*)input_method);
+	wl_signal_emit_mutable(&input_method->events.commit, (void*)input_method);
 }
 
 static void im_commit_string(struct wl_client *client,
@@ -141,68 +140,57 @@ static void popup_surface_set_mapped(
 		struct wlr_input_popup_surface_v2 *popup_surface, bool mapped) {
 	if (mapped && !popup_surface->mapped) {
 		popup_surface->mapped = true;
-		wlr_signal_emit_safe(&popup_surface->events.map, popup_surface);
+		wl_signal_emit_mutable(&popup_surface->events.map, popup_surface);
 	} else if (!mapped && popup_surface->mapped) {
-		wlr_signal_emit_safe(&popup_surface->events.unmap, popup_surface);
 		popup_surface->mapped = false;
+		wl_signal_emit_mutable(&popup_surface->events.unmap, popup_surface);
 	}
 }
 
 static void popup_surface_surface_role_commit(struct wlr_surface *surface) {
 	struct wlr_input_popup_surface_v2 *popup_surface = surface->role_data;
-	if (popup_surface == NULL) {
-		return;
-	}
+
 	popup_surface_set_mapped(popup_surface, wlr_surface_has_buffer(surface)
 		&& popup_surface->input_method->client_active);
 }
 
-static void popup_surface_surface_role_precommit(struct wlr_surface *surface) {
+static void popup_surface_surface_role_precommit(struct wlr_surface *surface,
+		const struct wlr_surface_state *state) {
 	struct wlr_input_popup_surface_v2 *popup_surface = surface->role_data;
-	if (popup_surface == NULL) {
-		return;
-	}
-	if (surface->pending.committed & WLR_SURFACE_STATE_BUFFER &&
-			surface->pending.buffer == NULL) {
+
+	if (state->committed & WLR_SURFACE_STATE_BUFFER && state->buffer == NULL) {
 		// This is a NULL commit
 		popup_surface_set_mapped(popup_surface, false);
 	}
+}
+
+static void popup_surface_surface_role_destroy(struct wlr_surface *surface) {
+	struct wlr_input_popup_surface_v2 *popup_surface = surface->role_data;
+
+	popup_surface_set_mapped(popup_surface, false);
+	wl_signal_emit_mutable(&popup_surface->events.destroy, NULL);
+	wl_list_remove(&popup_surface->link);
+	wl_resource_set_user_data(popup_surface->resource, NULL);
+	free(popup_surface);
 }
 
 static const struct wlr_surface_role input_popup_surface_v2_role = {
 	.name = "zwp_input_popup_surface_v2",
 	.commit = popup_surface_surface_role_commit,
 	.precommit = popup_surface_surface_role_precommit,
+	.destroy = popup_surface_surface_role_destroy,
 };
 
 bool wlr_surface_is_input_popup_surface_v2(struct wlr_surface *surface) {
 	return surface->role == &input_popup_surface_v2_role;
 }
 
-static void popup_surface_destroy(
-		struct wlr_input_popup_surface_v2 *popup_surface) {
-	popup_surface_set_mapped(popup_surface, false);
-	wlr_signal_emit_safe(&popup_surface->events.destroy, NULL);
-	wl_list_remove(&popup_surface->surface_destroy.link);
-	wl_list_remove(&popup_surface->link);
-	wl_resource_set_user_data(popup_surface->resource, NULL);
-	free(popup_surface);
-}
-
-static void popup_surface_handle_surface_destroy(struct wl_listener *listener,
-		void *data) {
-	struct wlr_input_popup_surface_v2 *popup_surface =
-		wl_container_of(listener, popup_surface, surface_destroy);
-	popup_surface_destroy(popup_surface);
-}
-
 static void popup_resource_destroy(struct wl_resource *resource) {
 	struct wlr_input_popup_surface_v2 *popup_surface =
 		wl_resource_get_user_data(resource);
-	if (popup_surface == NULL) {
-		return;
+	if (popup_surface != NULL) {
+		wlr_surface_destroy_role_object(popup_surface->surface);
 	}
-	popup_surface_destroy(popup_surface);
 }
 
 static void popup_destroy(struct wl_client *client,
@@ -250,10 +238,6 @@ static void im_get_input_popup_surface(struct wl_client *client,
 	popup_surface->resource = popup_resource;
 	popup_surface->input_method = input_method;
 	popup_surface->surface = surface;
-	wl_signal_add(&popup_surface->surface->events.destroy,
-		&popup_surface->surface_destroy);
-	popup_surface->surface_destroy.notify =
-		popup_surface_handle_surface_destroy;
 
 	wl_signal_init(&popup_surface->events.map);
 	wl_signal_init(&popup_surface->events.unmap);
@@ -264,7 +248,7 @@ static void im_get_input_popup_surface(struct wl_client *client,
 			&& popup_surface->input_method->client_active);
 
 	wl_list_insert(&input_method->popup_surfaces, &popup_surface->link);
-	wlr_signal_emit_safe(&input_method->events.new_popup_surface, popup_surface);
+	wl_signal_emit_mutable(&input_method->events.new_popup_surface, popup_surface);
 }
 
 void wlr_input_method_keyboard_grab_v2_destroy(
@@ -272,7 +256,7 @@ void wlr_input_method_keyboard_grab_v2_destroy(
 	if (!keyboard_grab) {
 		return;
 	}
-	wlr_signal_emit_safe(&keyboard_grab->events.destroy, keyboard_grab);
+	wl_signal_emit_mutable(&keyboard_grab->events.destroy, keyboard_grab);
 	keyboard_grab->input_method->keyboard_grab = NULL;
 	if (keyboard_grab->keyboard) {
 		wl_list_remove(&keyboard_grab->keyboard_keymap.link);
@@ -410,7 +394,7 @@ void wlr_input_method_keyboard_grab_v2_set_keyboard(
 			&keyboard_grab->keyboard_repeat_info);
 		keyboard_grab->keyboard_destroy.notify =
 			handle_keyboard_destroy;
-		wl_signal_add(&keyboard->events.destroy,
+		wl_signal_add(&keyboard->base.events.destroy,
 			&keyboard_grab->keyboard_destroy);
 
 		wlr_input_method_keyboard_grab_v2_send_modifiers(keyboard_grab,
@@ -452,7 +436,7 @@ static void im_grab_keyboard(struct wl_client *client,
 	keyboard_grab->input_method = input_method;
 	input_method->keyboard_grab = keyboard_grab;
 	wl_signal_init(&keyboard_grab->events.destroy);
-	wlr_signal_emit_safe(&input_method->events.grab_keyboard, keyboard_grab);
+	wl_signal_emit_mutable(&input_method->events.grab_keyboard, keyboard_grab);
 }
 
 static const struct zwp_input_method_v2_interface input_method_impl = {
@@ -575,7 +559,7 @@ static void manager_get_input_method(struct wl_client *client,
 	input_method->resource = im_resource;
 	wl_list_insert(&im_manager->input_methods,
 		wl_resource_get_link(input_method->resource));
-	wlr_signal_emit_safe(&im_manager->events.input_method, input_method);
+	wl_signal_emit_mutable(&im_manager->events.input_method, input_method);
 }
 
 static void manager_destroy(struct wl_client *client,
@@ -607,7 +591,7 @@ static void input_method_manager_bind(struct wl_client *wl_client, void *data,
 static void handle_display_destroy(struct wl_listener *listener, void *data) {
 	struct wlr_input_method_manager_v2 *manager =
 		wl_container_of(listener, manager, display_destroy);
-	wlr_signal_emit_safe(&manager->events.destroy, manager);
+	wl_signal_emit_mutable(&manager->events.destroy, manager);
 	wl_list_remove(&manager->display_destroy.link);
 	wl_global_destroy(manager->global);
 	free(manager);

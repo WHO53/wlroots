@@ -1,6 +1,5 @@
 #include <assert.h>
 #include <drm_fourcc.h>
-#include <gbm.h>
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 #include <stdint.h>
@@ -18,6 +17,13 @@
 #include "render/egl.h"
 #include "render/gles2.h"
 #include "render/pixel_format.h"
+#include "types/wlr_matrix.h"
+
+#include "common_vert_src.h"
+#include "quad_frag_src.h"
+#include "tex_rgba_frag_src.h"
+#include "tex_rgbx_frag_src.h"
+#include "tex_external_frag_src.h"
 
 static const GLfloat verts[] = {
 	1, 0, // top right
@@ -204,8 +210,8 @@ static void gles2_begin(struct wlr_renderer *wlr_renderer, uint32_t width,
 	renderer->viewport_height = height;
 
 	// refresh projection matrix
-	wlr_matrix_projection(renderer->projection, width, height,
-			WL_OUTPUT_TRANSFORM_NORMAL);
+	matrix_projection(renderer->projection, width, height,
+		WL_OUTPUT_TRANSFORM_FLIPPED_180);
 
 	glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -246,12 +252,6 @@ static void gles2_scissor(struct wlr_renderer *wlr_renderer,
 	pop_gles2_debug(renderer);
 }
 
-static const float flip_180[9] = {
-	1.0f, 0.0f, 0.0f,
-	0.0f, -1.0f, 0.0f,
-	0.0f, 0.0f, 1.0f,
-};
-
 static bool gles2_render_subtexture_with_matrix(
 		struct wlr_renderer *wlr_renderer, struct wlr_texture *wlr_texture,
 		const struct wlr_fbox *box, const float matrix[static 9],
@@ -273,13 +273,10 @@ static bool gles2_render_subtexture_with_matrix(
 		}
 		break;
 	case GL_TEXTURE_EXTERNAL_OES:
+		// EGL_EXT_image_dma_buf_import_modifiers requires
+		// GL_OES_EGL_image_external
+		assert(renderer->exts.OES_egl_image_external);
 		shader = &renderer->shaders.tex_ext;
-
-		if (!renderer->exts.OES_egl_image_external) {
-			wlr_log(WLR_ERROR, "Failed to render texture: "
-				"GL_TEXTURE_EXTERNAL_OES not supported");
-			return false;
-		}
 		break;
 	default:
 		abort();
@@ -287,7 +284,6 @@ static bool gles2_render_subtexture_with_matrix(
 
 	float gl_matrix[9];
 	wlr_matrix_multiply(gl_matrix, renderer->projection, matrix);
-	wlr_matrix_multiply(gl_matrix, flip_180, gl_matrix);
 
 	// OpenGL ES 2 requires the glUniformMatrix3fv transpose parameter to be set
 	// to GL_FALSE
@@ -347,7 +343,6 @@ static void gles2_render_quad_with_matrix(struct wlr_renderer *wlr_renderer,
 
 	float gl_matrix[9];
 	wlr_matrix_multiply(gl_matrix, renderer->projection, matrix);
-	wlr_matrix_multiply(gl_matrix, flip_180, gl_matrix);
 
 	// OpenGL ES 2 requires the glUniformMatrix3fv transpose parameter to be set
 	// to GL_FALSE
@@ -403,15 +398,10 @@ static uint32_t gles2_preferred_read_format(
 
 	push_gles2_debug(renderer);
 
-	GLint gl_format = -1, gl_type = -1;
+	GLint gl_format = -1, gl_type = -1, alpha_size = -1;
 	glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_FORMAT, &gl_format);
 	glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_TYPE, &gl_type);
-
-	EGLint alpha_size = -1;
-	glBindRenderbuffer(GL_RENDERBUFFER, renderer->current_buffer->rbo);
-	glGetRenderbufferParameteriv(GL_RENDERBUFFER,
-		GL_RENDERBUFFER_ALPHA_SIZE, &alpha_size);
-	glBindRenderbuffer(GL_RENDERBUFFER, 0);
+	glGetIntegerv(GL_ALPHA_BITS, &alpha_size);
 
 	pop_gles2_debug(renderer);
 
@@ -428,7 +418,7 @@ static uint32_t gles2_preferred_read_format(
 }
 
 static bool gles2_read_pixels(struct wlr_renderer *wlr_renderer,
-		uint32_t drm_format, uint32_t *flags, uint32_t stride,
+		uint32_t drm_format, uint32_t stride,
 		uint32_t width, uint32_t height, uint32_t src_x, uint32_t src_y,
 		uint32_t dst_x, uint32_t dst_y, void *data) {
 	struct wlr_gles2_renderer *renderer =
@@ -476,10 +466,6 @@ static bool gles2_read_pixels(struct wlr_renderer *wlr_renderer,
 	}
 
 	pop_gles2_debug(renderer);
-
-	if (flags != NULL) {
-		*flags = 0;
-	}
 
 	return glGetError() == GL_NO_ERROR;
 }
@@ -610,6 +596,7 @@ static GLuint compile_shader(struct wlr_gles2_renderer *renderer,
 	GLint ok;
 	glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
 	if (ok == GL_FALSE) {
+		wlr_log(WLR_ERROR, "Failed to compile shader");
 		glDeleteShader(shader);
 		shader = 0;
 	}
@@ -646,6 +633,7 @@ static GLuint link_program(struct wlr_gles2_renderer *renderer,
 	GLint ok;
 	glGetProgramiv(prog, GL_LINK_STATUS, &ok);
 	if (ok == GL_FALSE) {
+		wlr_log(WLR_ERROR, "Failed to link shader");
 		glDeleteProgram(prog);
 		goto error;
 	}
@@ -684,13 +672,6 @@ static void load_gl_proc(void *proc_ptr, const char *name) {
 	}
 	*(void **)proc_ptr = proc;
 }
-
-extern const GLchar quad_vertex_src[];
-extern const GLchar quad_fragment_src[];
-extern const GLchar tex_vertex_src[];
-extern const GLchar tex_fragment_src_rgba[];
-extern const GLchar tex_fragment_src_rgbx[];
-extern const GLchar tex_fragment_src_external[];
 
 struct wlr_renderer *wlr_gles2_renderer_create_with_drm_fd(int drm_fd) {
 	struct wlr_egl *egl = wlr_egl_create_with_drm_fd(drm_fd);
@@ -765,6 +746,9 @@ struct wlr_renderer *wlr_gles2_renderer_create(struct wlr_egl *egl) {
 	renderer->exts.OES_texture_half_float_linear =
 		check_gl_ext(exts_str, "GL_OES_texture_half_float_linear");
 
+	renderer->exts.EXT_texture_norm16 =
+		check_gl_ext(exts_str, "GL_EXT_texture_norm16");
+
 	if (check_gl_ext(exts_str, "GL_KHR_debug")) {
 		renderer->exts.KHR_debug = true;
 		load_gl_proc(&renderer->procs.glDebugMessageCallbackKHR,
@@ -801,7 +785,7 @@ struct wlr_renderer *wlr_gles2_renderer_create(struct wlr_egl *egl) {
 
 	GLuint prog;
 	renderer->shaders.quad.program = prog =
-		link_program(renderer, quad_vertex_src, quad_fragment_src);
+		link_program(renderer, common_vert_src, quad_frag_src);
 	if (!renderer->shaders.quad.program) {
 		goto error;
 	}
@@ -810,7 +794,7 @@ struct wlr_renderer *wlr_gles2_renderer_create(struct wlr_egl *egl) {
 	renderer->shaders.quad.pos_attrib = glGetAttribLocation(prog, "pos");
 
 	renderer->shaders.tex_rgba.program = prog =
-		link_program(renderer, tex_vertex_src, tex_fragment_src_rgba);
+		link_program(renderer, common_vert_src, tex_rgba_frag_src);
 	if (!renderer->shaders.tex_rgba.program) {
 		goto error;
 	}
@@ -821,7 +805,7 @@ struct wlr_renderer *wlr_gles2_renderer_create(struct wlr_egl *egl) {
 	renderer->shaders.tex_rgba.tex_attrib = glGetAttribLocation(prog, "texcoord");
 
 	renderer->shaders.tex_rgbx.program = prog =
-		link_program(renderer, tex_vertex_src, tex_fragment_src_rgbx);
+		link_program(renderer, common_vert_src, tex_rgbx_frag_src);
 	if (!renderer->shaders.tex_rgbx.program) {
 		goto error;
 	}
@@ -833,7 +817,7 @@ struct wlr_renderer *wlr_gles2_renderer_create(struct wlr_egl *egl) {
 
 	if (renderer->exts.OES_egl_image_external) {
 		renderer->shaders.tex_ext.program = prog =
-			link_program(renderer, tex_vertex_src, tex_fragment_src_external);
+			link_program(renderer, common_vert_src, tex_external_frag_src);
 		if (!renderer->shaders.tex_ext.program) {
 			goto error;
 		}

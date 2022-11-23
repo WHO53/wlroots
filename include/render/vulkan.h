@@ -9,17 +9,13 @@
 #include <wlr/render/wlr_texture.h>
 #include <wlr/render/drm_format_set.h>
 #include <wlr/render/interface.h>
+#include <wlr/util/addon.h>
 
 struct wlr_vk_descriptor_pool;
 
-// Central vulkan state that should only be needed once per compositor.
 struct wlr_vk_instance {
 	VkInstance instance;
 	VkDebugUtilsMessengerEXT messenger;
-
-	// enabled extensions
-	size_t extension_count;
-	const char **extensions;
 
 	struct {
 		PFN_vkCreateDebugUtilsMessengerEXT createDebugUtilsMessengerEXT;
@@ -28,18 +24,12 @@ struct wlr_vk_instance {
 };
 
 // Creates and initializes a vulkan instance.
-// Will try to enable the given extensions but not fail if they are not
-// available which can later be checked by the caller.
 // The debug parameter determines if validation layers are enabled and a
 // debug messenger created.
-// `compositor_name` and `compositor_version` are passed to the vulkan driver.
-struct wlr_vk_instance *vulkan_instance_create(size_t ext_count,
-	const char **exts, bool debug);
+struct wlr_vk_instance *vulkan_instance_create(bool debug);
 void vulkan_instance_destroy(struct wlr_vk_instance *ini);
 
 // Logical vulkan device state.
-// Ownership can be shared by multiple renderers, reference counted
-// with `renderers`.
 struct wlr_vk_device {
 	struct wlr_vk_instance *instance;
 
@@ -47,10 +37,6 @@ struct wlr_vk_device {
 	VkDevice dev;
 
 	int drm_fd;
-
-	// enabled extensions
-	size_t extension_count;
-	const char **extensions;
 
 	// we only ever need one queue for rendering and transfer commands
 	uint32_t queue_family;
@@ -76,10 +62,8 @@ struct wlr_vk_device {
 VkPhysicalDevice vulkan_find_drm_phdev(struct wlr_vk_instance *ini, int drm_fd);
 
 // Creates a device for the given instance and physical device.
-// Will try to enable the given extensions but not fail if they are not
-// available which can later be checked by the caller.
 struct wlr_vk_device *vulkan_device_create(struct wlr_vk_instance *ini,
-	VkPhysicalDevice phdev, size_t ext_count, const char **exts);
+	VkPhysicalDevice phdev);
 void vulkan_device_destroy(struct wlr_vk_device *dev);
 
 // Tries to find any memory bit for the given vulkan device that
@@ -127,7 +111,7 @@ void vulkan_format_props_finish(struct wlr_vk_format_props *props);
 // For each format we want to render, we need a separate renderpass
 // and therefore also separate pipelines.
 struct wlr_vk_render_format_setup {
-	struct wl_list link;
+	struct wl_list link; // wlr_vk_renderer.render_format_setups
 	VkFormat render_format; // used in renderpass
 	VkRenderPass render_pass;
 
@@ -138,6 +122,7 @@ struct wlr_vk_render_format_setup {
 // Renderer-internal represenation of an wlr_buffer imported for rendering.
 struct wlr_vk_render_buffer {
 	struct wlr_buffer *wlr_buffer;
+	struct wlr_addon addon;
 	struct wlr_vk_renderer *renderer;
 	struct wlr_vk_render_format_setup *render_setup;
 	struct wl_list link; // wlr_vk_renderer.buffers
@@ -148,8 +133,6 @@ struct wlr_vk_render_buffer {
 	uint32_t mem_count;
 	VkDeviceMemory memories[WLR_DMABUF_MAX_PLANES];
 	bool transitioned;
-
-	struct wl_listener buffer_destroy;
 };
 
 // Vulkan wlr_renderer implementation on top of a wlr_vk_device.
@@ -185,20 +168,30 @@ struct wlr_vk_renderer {
 	float projection[9];
 
 	size_t last_pool_size;
-	struct wl_list descriptor_pools; // type wlr_vk_descriptor_pool
-	struct wl_list render_format_setups;
+	struct wl_list descriptor_pools; // wlr_vk_descriptor_pool.link
+	struct wl_list render_format_setups; // wlr_vk_render_format_setup.link
 
-	struct wl_list textures; // wlr_gles2_texture.link
-	struct wl_list destroy_textures; // wlr_vk_texture to destroy after frame
-	struct wl_list foreign_textures; // wlr_vk_texture to return to foreign queue
+	struct wl_list textures; // wlr_vk_texture.link
+	// Textures to destroy after frame
+	struct wl_list destroy_textures; // wlr_vk_texture.destroy_link
+	// Textures to return to foreign queue
+	struct wl_list foreign_textures; // wlr_vk_texture.foreign_link
 
-	struct wl_list render_buffers; // wlr_vk_render_buffer
+	struct wl_list render_buffers; // wlr_vk_render_buffer.link
 
 	struct {
 		VkCommandBuffer cb;
 		bool recording;
-		struct wl_list buffers; // type wlr_vk_shared_buffer
+		struct wl_list buffers; // wlr_vk_shared_buffer.link
 	} stage;
+
+	struct {
+		bool initialized;
+		uint32_t drm_format;
+		uint32_t width, height;
+		VkImage dst_image;
+		VkDeviceMemory dst_img_memory;
+	} read_pixels_cache;
 };
 
 // Creates a vulkan renderer for the given device.
@@ -246,13 +239,13 @@ struct wlr_vk_texture {
 	bool dmabuf_imported;
 	bool owned; // if dmabuf_imported: whether we have ownership of the image
 	bool transitioned; // if dma_imported: whether we transitioned it away from preinit
-	struct wl_list foreign_link;
-	struct wl_list destroy_link;
-	struct wl_list link; // wlr_gles2_renderer.textures
+	struct wl_list foreign_link; // wlr_vk_renderer.foreign_textures
+	struct wl_list destroy_link; // wlr_vk_renderer.destroy_textures
+	struct wl_list link; // wlr_vk_renderer.textures
 
 	// If imported from a wlr_buffer
 	struct wlr_buffer *buffer;
-	struct wl_listener buffer_destroy;
+	struct wlr_addon buffer_addon;
 };
 
 struct wlr_vk_texture *vulkan_get_texture(struct wlr_texture *wlr_texture);
@@ -267,7 +260,7 @@ void vulkan_texture_destroy(struct wlr_vk_texture *texture);
 struct wlr_vk_descriptor_pool {
 	VkDescriptorPool pool;
 	uint32_t free; // number of textures that can be allocated
-	struct wl_list link;
+	struct wl_list link; // wlr_vk_renderer.descriptor_pools
 };
 
 struct wlr_vk_allocation {
@@ -278,14 +271,11 @@ struct wlr_vk_allocation {
 // List of suballocated staging buffers.
 // Used to upload to/read from device local images.
 struct wlr_vk_shared_buffer {
-	struct wl_list link;
+	struct wl_list link; // wlr_vk_renderer.stage.buffers
 	VkBuffer buffer;
 	VkDeviceMemory memory;
 	VkDeviceSize buf_size;
-
-	size_t allocs_size;
-	size_t allocs_capacity;
-	struct wlr_vk_allocation *allocs;
+	struct wl_array allocs; // struct wlr_vk_allocation
 };
 
 // Suballocated range on a buffer.
