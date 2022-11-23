@@ -4,10 +4,11 @@ Maintainer: Sway and related packages team <team+swaywm@tracker.debian.org>
 Uploaders: Guido Günther <agx@sigxcpu.org>, Birger Schacht <birger@rantanplan.org>
 Build-Depends:
  debhelper-compat (= 13),
+ hwdata,
  libavformat-dev,
  libavcodec-dev,
  libcap-dev,
- libdrm-dev (>= 2.4.109),
+ libdrm-dev (>= 2.4.113),
  libegl1-mesa-dev,
  libgbm-dev (>= 17.1.0),
  libgles2-mesa-dev,
@@ -30,7 +31,7 @@ Build-Depends:
  libxcb-xinput-dev,
  libx11-xcb-dev,
  libxkbcommon-dev,
- meson (>= 0.58.1),
+ meson (>= 0.59.0),
  pkg-config,
  wayland-protocols (>= 1.24),
  xwayland,
