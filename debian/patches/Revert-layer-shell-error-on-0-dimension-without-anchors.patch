@@ -10,12 +10,12 @@ Revert this until phosh has a fixed release.
  1 file changed, 20 deletions(-)
 
 diff --git a/types/wlr_layer_shell_v1.c b/types/wlr_layer_shell_v1.c
-index 456dbc0..55a6cfb 100644
+index fa054d3..062fa96 100644
 --- a/types/wlr_layer_shell_v1.c
 +++ b/types/wlr_layer_shell_v1.c
-@@ -328,26 +328,6 @@ static void layer_surface_role_commit(struct wlr_surface *wlr_surface) {
- 		return;
- 	}
+@@ -316,26 +316,6 @@ static void layer_surface_role_commit(struct wlr_surface *wlr_surface) {
+ 	struct wlr_layer_surface_v1 *surface =
+ 		wlr_layer_surface_v1_from_wlr_surface(wlr_surface);
  
 -	const uint32_t horiz = ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
 -		ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
