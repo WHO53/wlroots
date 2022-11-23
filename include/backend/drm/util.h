@@ -2,17 +2,18 @@
 #define BACKEND_DRM_UTIL_H
 
 #include <stdint.h>
-#include <wlr/types/wlr_output.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
+struct wlr_drm_connector;
+
 // Calculates a more accurate refresh rate (mHz) than what mode itself provides
 int32_t calculate_refresh_rate(const drmModeModeInfo *mode);
+enum wlr_output_mode_aspect_ratio get_picture_aspect_ratio(const drmModeModeInfo *mode);
+// Returns manufacturer based on pnp id
+const char *get_pnp_manufacturer(uint16_t code);
 // Populates the make/model/phys_{width,height} of output from the edid data
-void parse_edid(struct wlr_output *restrict output, size_t len,
-	const uint8_t *data);
-// Returns the string representation of a DRM output type
-const char *conn_get_name(uint32_t type_id);
+void parse_edid(struct wlr_drm_connector *conn, size_t len, const uint8_t *data);
 
 // Part of match_obj
 enum {
@@ -35,12 +36,5 @@ enum {
 size_t match_obj(size_t num_objs, const uint32_t objs[static restrict num_objs],
 		size_t num_res, const uint32_t res[static restrict num_res],
 		uint32_t out[static restrict num_res]);
-
-/**
- * Close a GEM buffer handle.
- *
- * TODO: replace with drmCloseBufferHandle.
- */
-void close_bo_handle(int drm_fd, uint32_t handle);
 
 #endif

@@ -25,8 +25,9 @@ packages:
   - x11-servers/xwayland
   - sysutils/seatd
   - gmake
+  - hwdata
 sources:
-  - https://github.com/swaywm/wlroots
+  - https://gitlab.freedesktop.org/wlroots/wlroots.git
 tasks:
   - wlroots: |
       cd wlroots

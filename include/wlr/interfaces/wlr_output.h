@@ -21,10 +21,11 @@
 	(WLR_OUTPUT_STATE_DAMAGE | \
 	WLR_OUTPUT_STATE_SCALE | \
 	WLR_OUTPUT_STATE_TRANSFORM | \
-	WLR_OUTPUT_STATE_ADAPTIVE_SYNC_ENABLED)
+	WLR_OUTPUT_STATE_RENDER_FORMAT | \
+	WLR_OUTPUT_STATE_SUBPIXEL)
 
 /**
- * A backend implementation of wlr_output.
+ * A backend implementation of struct wlr_output.
  *
  * The commit function is mandatory. Other functions are optional.
  */
@@ -37,7 +38,7 @@ struct wlr_output_impl {
 	 * The hotspot indicates the offset that needs to be applied to the
 	 * top-left corner of the image to match the cursor position. In other
 	 * words, the image should be displayed at (x - hotspot_x, y - hotspot_y).
-	 * The hotspot is given in the texture's coordinate space.
+	 * The hotspot is given in the buffer's coordinate space.
 	 */
 	bool (*set_cursor)(struct wlr_output *output, struct wlr_buffer *buffer,
 		int hotspot_x, int hotspot_y);
@@ -52,18 +53,18 @@ struct wlr_output_impl {
 	 */
 	void (*destroy)(struct wlr_output *output);
 	/**
-	 * Check that the pending output state is a valid configuration.
+	 * Check that the supplied output state is a valid configuration.
 	 *
 	 * If this function returns true, commit can only fail due to a runtime
 	 * error.
 	 */
-	bool (*test)(struct wlr_output *output);
+	bool (*test)(struct wlr_output *output, const struct wlr_output_state *state);
 	/**
-	 * Commit the pending output state.
+	 * Commit the supplied output state.
 	 *
 	 * If a buffer has been attached, a frame event is scheduled.
 	 */
-	bool (*commit)(struct wlr_output *output);
+	bool (*commit)(struct wlr_output *output, const struct wlr_output_state *state);
 	/**
 	 * Get the maximum number of gamma LUT elements for each channel.
 	 *
@@ -85,7 +86,7 @@ struct wlr_output_impl {
 	 */
 	void (*get_cursor_size)(struct wlr_output *output, int *width, int *height);
 	/**
-	 * Get the list of DMA-BUF formats suitable for the primary buffer,
+	 * Get the list of DRM formats suitable for the primary buffer,
 	 * assuming a buffer with the specified capabilities.
 	 *
 	 * If unimplemented, the primary buffer has no format constraint. If NULL

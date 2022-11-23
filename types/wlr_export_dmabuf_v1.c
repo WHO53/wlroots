@@ -6,7 +6,6 @@
 #include <wlr/types/wlr_export_dmabuf_v1.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/util/log.h>
-#include "util/signal.h"
 #include "wlr-export-dmabuf-unstable-v1-protocol.h"
 
 #define EXPORT_DMABUF_MANAGER_VERSION 1
@@ -66,7 +65,7 @@ static void frame_output_handle_commit(struct wl_listener *listener,
 	wl_list_init(&frame->output_commit.link);
 
 	struct wlr_dmabuf_attributes attribs = {0};
-	if (!wlr_output_export_dmabuf(frame->output, &attribs)) {
+	if (!wlr_buffer_get_dmabuf(event->buffer, &attribs)) {
 		zwlr_export_dmabuf_frame_v1_send_cancel(frame->resource,
 			ZWLR_EXPORT_DMABUF_FRAME_V1_CANCEL_REASON_TEMPORARY);
 		frame_destroy(frame);
@@ -77,7 +76,7 @@ static void frame_output_handle_commit(struct wl_listener *listener,
 	uint32_t mod_high = attribs.modifier >> 32;
 	uint32_t mod_low = attribs.modifier & 0xFFFFFFFF;
 	zwlr_export_dmabuf_frame_v1_send_frame(frame->resource,
-		attribs.width, attribs.height, 0, 0, attribs.flags, frame_flags,
+		attribs.width, attribs.height, 0, 0, 0, frame_flags,
 		attribs.format, mod_high, mod_low, attribs.n_planes);
 
 	for (int i = 0; i < attribs.n_planes; ++i) {
@@ -85,8 +84,6 @@ static void frame_output_handle_commit(struct wl_listener *listener,
 		zwlr_export_dmabuf_frame_v1_send_object(frame->resource, i,
 			attribs.fd[i], size, attribs.offset[i], attribs.stride[i], i);
 	}
-
-	wlr_dmabuf_attributes_finish(&attribs);
 
 	time_t tv_sec = event->when->tv_sec;
 	uint32_t tv_sec_hi = (sizeof(tv_sec) > 4) ? tv_sec >> 32 : 0;
@@ -184,7 +181,7 @@ static void manager_bind(struct wl_client *client, void *data, uint32_t version,
 static void handle_display_destroy(struct wl_listener *listener, void *data) {
 	struct wlr_export_dmabuf_manager_v1 *manager =
 		wl_container_of(listener, manager, display_destroy);
-	wlr_signal_emit_safe(&manager->events.destroy, manager);
+	wl_signal_emit_mutable(&manager->events.destroy, manager);
 	wl_list_remove(&manager->display_destroy.link);
 	wl_global_destroy(manager->global);
 	free(manager);

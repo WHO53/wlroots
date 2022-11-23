@@ -48,31 +48,6 @@ void finish_drm_renderer(struct wlr_drm_renderer *renderer) {
 	wlr_renderer_destroy(renderer->wlr_rend);
 }
 
-bool init_drm_surface(struct wlr_drm_surface *surf,
-		struct wlr_drm_renderer *renderer, uint32_t width, uint32_t height,
-		const struct wlr_drm_format *drm_format) {
-	if (surf->width == width && surf->height == height) {
-		return true;
-	}
-
-	surf->renderer = renderer;
-	surf->width = width;
-	surf->height = height;
-
-	wlr_swapchain_destroy(surf->swapchain);
-	surf->swapchain = NULL;
-
-	surf->swapchain = wlr_swapchain_create(renderer->allocator, width, height,
-			drm_format);
-	if (surf->swapchain == NULL) {
-		wlr_log(WLR_ERROR, "Failed to create swapchain");
-		memset(surf, 0, sizeof(*surf));
-		return false;
-	}
-
-	return true;
-}
-
 static void finish_drm_surface(struct wlr_drm_surface *surf) {
 	if (!surf || !surf->renderer) {
 		return;
@@ -83,32 +58,57 @@ static void finish_drm_surface(struct wlr_drm_surface *surf) {
 	memset(surf, 0, sizeof(*surf));
 }
 
+bool init_drm_surface(struct wlr_drm_surface *surf,
+		struct wlr_drm_renderer *renderer, int width, int height,
+		const struct wlr_drm_format *drm_format) {
+	if (surf->swapchain != NULL && surf->swapchain->width == width &&
+			surf->swapchain->height == height) {
+		return true;
+	}
+
+	finish_drm_surface(surf);
+
+	surf->swapchain = wlr_swapchain_create(renderer->allocator, width, height,
+			drm_format);
+	if (surf->swapchain == NULL) {
+		wlr_log(WLR_ERROR, "Failed to create swapchain");
+		return false;
+	}
+
+	surf->renderer = renderer;
+
+	return true;
+}
+
 struct wlr_buffer *drm_surface_blit(struct wlr_drm_surface *surf,
 		struct wlr_buffer *buffer) {
 	struct wlr_renderer *renderer = surf->renderer->wlr_rend;
 
-	if (surf->width != (uint32_t)buffer->width ||
-			surf->height != (uint32_t)buffer->height) {
+	if (surf->swapchain->width != buffer->width ||
+			surf->swapchain->height != buffer->height) {
 		wlr_log(WLR_ERROR, "Surface size doesn't match buffer size");
 		return NULL;
 	}
 
 	struct wlr_texture *tex = wlr_texture_from_buffer(renderer, buffer);
 	if (tex == NULL) {
+		wlr_log(WLR_ERROR, "Failed to import source buffer into multi-GPU renderer");
 		return NULL;
 	}
 
 	struct wlr_buffer *dst = wlr_swapchain_acquire(surf->swapchain, NULL);
 	if (!dst) {
+		wlr_log(WLR_ERROR, "Failed to acquire multi-GPU swapchain buffer");
 		wlr_texture_destroy(tex);
 		return NULL;
 	}
 
 	float mat[9];
 	wlr_matrix_identity(mat);
-	wlr_matrix_scale(mat, surf->width, surf->height);
+	wlr_matrix_scale(mat, surf->swapchain->width, surf->swapchain->height);
 
 	if (!wlr_renderer_begin_with_buffer(renderer, dst)) {
+		wlr_log(WLR_ERROR, "Failed to bind multi-GPU destination buffer");
 		wlr_buffer_unlock(dst);
 		wlr_texture_destroy(tex);
 		return NULL;
@@ -149,7 +149,7 @@ struct wlr_drm_format *drm_plane_pick_render_format(
 	const struct wlr_drm_format_set *plane_formats = &plane->formats;
 
 	uint32_t fmt = DRM_FORMAT_ARGB8888;
-	if (!wlr_drm_format_set_has(&plane->formats, fmt, DRM_FORMAT_MOD_INVALID)) {
+	if (!wlr_drm_format_set_get(&plane->formats, fmt)) {
 		const struct wlr_pixel_format_info *format_info =
 			drm_get_pixel_format_info(fmt);
 		assert(format_info != NULL &&
@@ -220,6 +220,13 @@ static uint32_t get_fb_for_bo(struct wlr_drm_backend *drm,
 			wlr_log_errno(WLR_DEBUG, "drmModeAddFB2WithModifiers failed");
 		}
 	} else {
+		if (dmabuf->modifier != DRM_FORMAT_MOD_INVALID &&
+				dmabuf->modifier != DRM_FORMAT_MOD_LINEAR) {
+			wlr_log(WLR_ERROR, "Cannot import DRM framebuffer with explicit "
+				"modifier 0x%"PRIX64, dmabuf->modifier);
+			return 0;
+		}
+
 		int ret = drmModeAddFB2(drm->fd, dmabuf->width, dmabuf->height,
 			dmabuf->format, handles, dmabuf->stride, dmabuf->offset, &id, 0);
 		if (ret != 0 && dmabuf->format == DRM_FORMAT_ARGB8888 &&
@@ -264,28 +271,60 @@ static void close_all_bo_handles(struct wlr_drm_backend *drm,
 			continue;
 		}
 
-		close_bo_handle(drm->fd, handles[i]);
+		if (drmCloseBufferHandle(drm->fd, handles[i]) != 0) {
+			wlr_log_errno(WLR_ERROR, "drmCloseBufferHandle failed");
+		}
 	}
+}
+
+static void drm_poisoned_fb_handle_destroy(struct wlr_addon *addon) {
+	wlr_addon_finish(addon);
+	free(addon);
+}
+
+static const struct wlr_addon_interface poisoned_fb_addon_impl = {
+	.name = "wlr_drm_poisoned_fb",
+	.destroy = drm_poisoned_fb_handle_destroy,
+};
+
+static bool is_buffer_poisoned(struct wlr_drm_backend *drm,
+		struct wlr_buffer *buf) {
+	return wlr_addon_find(&buf->addons, drm, &poisoned_fb_addon_impl) != NULL;
+}
+
+/**
+ * Mark the buffer as "poisoned", ie. it cannot be imported into KMS. This
+ * allows us to avoid repeatedly trying to import it when it's not
+ * scanout-capable.
+ */
+static void poison_buffer(struct wlr_drm_backend *drm,
+		struct wlr_buffer *buf) {
+	struct wlr_addon *addon = calloc(1, sizeof(*addon));
+	if (addon == NULL) {
+		wlr_log_errno(WLR_ERROR, "Allocation failed");
+		return;
+	}
+	wlr_addon_init(addon, &buf->addons, drm, &poisoned_fb_addon_impl);
+	wlr_log(WLR_DEBUG, "Poisoning buffer");
 }
 
 static struct wlr_drm_fb *drm_fb_create(struct wlr_drm_backend *drm,
 		struct wlr_buffer *buf, const struct wlr_drm_format_set *formats) {
+	struct wlr_dmabuf_attributes attribs;
+	if (!wlr_buffer_get_dmabuf(buf, &attribs)) {
+		wlr_log(WLR_DEBUG, "Failed to get DMA-BUF from buffer");
+		return NULL;
+	}
+
+	if (is_buffer_poisoned(drm, buf)) {
+		wlr_log(WLR_DEBUG, "Buffer is poisoned");
+		return NULL;
+	}
+
 	struct wlr_drm_fb *fb = calloc(1, sizeof(*fb));
 	if (!fb) {
 		wlr_log_errno(WLR_ERROR, "Allocation failed");
 		return NULL;
-	}
-
-	struct wlr_dmabuf_attributes attribs;
-	if (!wlr_buffer_get_dmabuf(buf, &attribs)) {
-		wlr_log(WLR_DEBUG, "Failed to get DMA-BUF from buffer");
-		goto error_get_dmabuf;
-	}
-
-	if (attribs.flags != 0) {
-		wlr_log(WLR_DEBUG, "Buffer with DMA-BUF flags 0x%"PRIX32" cannot be "
-			"scanned out", attribs.flags);
-		goto error_get_dmabuf;
 	}
 
 	if (formats && !wlr_drm_format_set_has(formats, attribs.format,
@@ -301,7 +340,7 @@ static struct wlr_drm_fb *drm_fb_create(struct wlr_drm_backend *drm,
 			wlr_log(WLR_DEBUG, "Buffer format 0x%"PRIX32" with modifier "
 				"0x%"PRIX64" cannot be scanned out",
 				attribs.format, attribs.modifier);
-			goto error_get_dmabuf;
+			goto error_fb;
 		}
 	}
 
@@ -317,6 +356,7 @@ static struct wlr_drm_fb *drm_fb_create(struct wlr_drm_backend *drm,
 	fb->id = get_fb_for_bo(drm, &attribs, handles);
 	if (!fb->id) {
 		wlr_log(WLR_DEBUG, "Failed to import BO in KMS");
+		poison_buffer(drm, buf);
 		goto error_bo_handle;
 	}
 
@@ -332,7 +372,7 @@ static struct wlr_drm_fb *drm_fb_create(struct wlr_drm_backend *drm,
 
 error_bo_handle:
 	close_all_bo_handles(drm, handles);
-error_get_dmabuf:
+error_fb:
 	free(fb);
 	return NULL;
 }

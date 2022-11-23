@@ -36,7 +36,7 @@ struct wlr_drm_plane {
 
 struct wlr_drm_crtc {
 	uint32_t id;
-	uint32_t lessee_id;
+	struct wlr_drm_lease *lease;
 
 	// Atomic modesetting only
 	uint32_t mode_id;
@@ -89,15 +89,6 @@ struct wlr_drm_backend {
 	struct wlr_drm_format_set mgpu_formats;
 };
 
-enum wlr_drm_connector_status {
-	// Connector is available but no output is plugged in
-	WLR_DRM_CONN_DISCONNECTED,
-	// An output just has been plugged in and is waiting for a modeset
-	WLR_DRM_CONN_NEEDS_MODESET,
-	WLR_DRM_CONN_CLEANUP,
-	WLR_DRM_CONN_CONNECTED,
-};
-
 struct wlr_drm_mode {
 	struct wlr_output_mode wlr_mode;
 	drmModeModeInfo drm_mode;
@@ -115,10 +106,10 @@ struct wlr_drm_connector {
 
 	struct wlr_drm_backend *backend;
 	char name[24];
-	enum wlr_drm_connector_status status;
-	bool desired_enabled;
+	drmModeConnection status;
 	uint32_t id;
-	uint32_t lessee_id;
+	uint64_t max_bpc;
+	struct wlr_drm_lease *lease;
 
 	struct wlr_drm_crtc *crtc;
 	uint32_t possible_crtcs;
@@ -147,7 +138,9 @@ struct wlr_drm_backend *get_drm_backend_from_backend(
 bool check_drm_features(struct wlr_drm_backend *drm);
 bool init_drm_resources(struct wlr_drm_backend *drm);
 void finish_drm_resources(struct wlr_drm_backend *drm);
-void scan_drm_connectors(struct wlr_drm_backend *state);
+void scan_drm_connectors(struct wlr_drm_backend *state,
+	struct wlr_device_hotplug_event *event);
+void scan_drm_leases(struct wlr_drm_backend *drm);
 int handle_drm_event(int fd, uint32_t mask, void *data);
 void destroy_drm_connector(struct wlr_drm_connector *conn);
 bool drm_connector_commit_state(struct wlr_drm_connector *conn,
@@ -156,6 +149,7 @@ bool drm_connector_is_cursor_visible(struct wlr_drm_connector *conn);
 bool drm_connector_supports_vrr(struct wlr_drm_connector *conn);
 size_t drm_crtc_get_gamma_lut_size(struct wlr_drm_backend *drm,
 	struct wlr_drm_crtc *crtc);
+void drm_lease_destroy(struct wlr_drm_lease *lease);
 
 struct wlr_drm_fb *plane_get_next_fb(struct wlr_drm_plane *plane);
 

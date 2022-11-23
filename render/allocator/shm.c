@@ -3,7 +3,11 @@
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <wlr/interfaces/wlr_buffer.h>
+#include <wlr/render/allocator.h>
+#include <wlr/render/drm_format_set.h>
 #include <wlr/util/log.h>
+
 #include "render/pixel_format.h"
 #include "render/allocator/shm.h"
 #include "util/shm.h"

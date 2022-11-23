@@ -11,7 +11,6 @@
 #include <wayland-client.h>
 #include <wayland-cursor.h>
 #include <wayland-egl.h>
-#include <wlr/util/log.h>
 #include "egl_common.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
@@ -125,9 +124,10 @@ static void draw(void) {
 
 	glViewport(0, 0, width, height);
 	if (buttons) {
-		glClearColor(1, 1, 1, alpha);
+		glClearColor(alpha, alpha, alpha, alpha);
 	} else {
-		glClearColor(demo.color[0], demo.color[1], demo.color[2], alpha);
+		glClearColor(demo.color[0] * alpha, demo.color[1] * alpha,
+			demo.color[2] * alpha, alpha);
 	}
 	glClear(GL_COLOR_BUFFER_BIT);
 
@@ -152,7 +152,8 @@ static void draw_popup(void) {
 
 	eglMakeCurrent(egl_display, popup_egl_surface, popup_egl_surface, egl_context);
 	glViewport(0, 0, popup_width, popup_height);
-	glClearColor(popup_red, 0.5f, 0.5f, popup_alpha);
+	glClearColor(popup_red * popup_alpha, 0.5f * popup_alpha,
+		0.5f * popup_alpha, popup_alpha);
 	popup_alpha += alpha_mod;
 	if (popup_alpha < 0.01 || popup_alpha >= 1.0f) {
 		alpha_mod *= -1.0;
@@ -177,8 +178,7 @@ static const struct xdg_surface_listener xdg_surface_listener = {
 
 static void xdg_popup_configure(void *data, struct xdg_popup *xdg_popup,
 		int32_t x, int32_t y, int32_t width, int32_t height) {
-	wlr_log(WLR_DEBUG, "Popup configured %dx%d@%d,%d",
-			width, height, x, y);
+	fprintf(stderr, "Popup configured %dx%d@%d,%d\n", width, height, x, y);
 	popup_width = width;
 	popup_height = height;
 	if (popup_egl_window) {
@@ -197,7 +197,7 @@ static void popup_destroy(void) {
 }
 
 static void xdg_popup_done(void *data, struct xdg_popup *xdg_popup) {
-	wlr_log(WLR_DEBUG, "Popup done");
+	fprintf(stderr, "Popup done\n");
 	popup_destroy();
 }
 
@@ -377,17 +377,17 @@ static void wl_keyboard_keymap(void *data, struct wl_keyboard *wl_keyboard,
 
 static void wl_keyboard_enter(void *data, struct wl_keyboard *wl_keyboard,
 		uint32_t serial, struct wl_surface *surface, struct wl_array *keys) {
-	wlr_log(WLR_DEBUG, "Keyboard enter");
+	fprintf(stderr, "Keyboard enter\n");
 }
 
 static void wl_keyboard_leave(void *data, struct wl_keyboard *wl_keyboard,
 		uint32_t serial, struct wl_surface *surface) {
-	wlr_log(WLR_DEBUG, "Keyboard leave");
+	fprintf(stderr, "Keyboard leave\n");
 }
 
 static void wl_keyboard_key(void *data, struct wl_keyboard *wl_keyboard,
 		uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
-	wlr_log(WLR_DEBUG, "Key event: %d %d", key, state);
+	fprintf(stderr, "Key event: %d %d\n", key, state);
 }
 
 static void wl_keyboard_modifiers(void *data, struct wl_keyboard *wl_keyboard,
@@ -473,7 +473,6 @@ static const struct wl_registry_listener registry_listener = {
 };
 
 int main(int argc, char **argv) {
-	wlr_log_init(WLR_DEBUG, NULL);
 	char *namespace = "wlroots";
 	int exclusive_zone = 0;
 	int32_t margin_right = 0, margin_bottom = 0, margin_left = 0;

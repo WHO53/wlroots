@@ -16,7 +16,6 @@
 struct wlr_backend_impl {
 	bool (*start)(struct wlr_backend *backend);
 	void (*destroy)(struct wlr_backend *backend);
-	struct wlr_renderer *(*get_renderer)(struct wlr_backend *backend);
 	struct wlr_session *(*get_session)(struct wlr_backend *backend);
 	clockid_t (*get_presentation_clock)(struct wlr_backend *backend);
 	int (*get_drm_fd)(struct wlr_backend *backend);
@@ -24,8 +23,8 @@ struct wlr_backend_impl {
 };
 
 /**
- * Initializes common state on a wlr_backend and sets the implementation to the
- * provided wlr_backend_impl reference.
+ * Initializes common state on a struct wlr_backend and sets the implementation
+ * to the provided struct wlr_backend_impl reference.
  */
 void wlr_backend_init(struct wlr_backend *backend,
 		const struct wlr_backend_impl *impl);

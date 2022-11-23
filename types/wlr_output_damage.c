@@ -5,7 +5,7 @@
 #include <wlr/types/wlr_output_damage.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/util/box.h>
-#include "util/signal.h"
+#include "types/wlr_output.h"
 
 static void output_handle_destroy(struct wl_listener *listener, void *data) {
 	struct wlr_output_damage *output_damage =
@@ -41,19 +41,7 @@ static void output_handle_frame(struct wl_listener *listener, void *data) {
 		return;
 	}
 
-	wlr_signal_emit_safe(&output_damage->events.frame, output_damage);
-}
-
-static void output_handle_precommit(struct wl_listener *listener, void *data) {
-	struct wlr_output_damage *output_damage =
-		wl_container_of(listener, output_damage, output_precommit);
-	struct wlr_output *output = output_damage->output;
-
-	if (output->pending.committed & WLR_OUTPUT_STATE_BUFFER) {
-		// TODO: find a better way to access this info without a precommit
-		// handler
-		output_damage->pending_attach_render = output->back_buffer != NULL;
-	}
+	wl_signal_emit_mutable(&output_damage->events.frame, output_damage);
 }
 
 static void output_handle_commit(struct wl_listener *listener, void *data) {
@@ -63,7 +51,7 @@ static void output_handle_commit(struct wl_listener *listener, void *data) {
 
 	if (event->committed & WLR_OUTPUT_STATE_BUFFER) {
 		pixman_region32_t *prev;
-		if (output_damage->pending_attach_render) {
+		if (!output_is_direct_scanout(output_damage->output, event->buffer)) {
 			// render-buffers have been swapped, rotate the damage
 
 			// same as decrementing, but works on unsigned integers
@@ -114,8 +102,6 @@ struct wlr_output_damage *wlr_output_damage_create(struct wlr_output *output) {
 	output_damage->output_damage.notify = output_handle_damage;
 	wl_signal_add(&output->events.frame, &output_damage->output_frame);
 	output_damage->output_frame.notify = output_handle_frame;
-	wl_signal_add(&output->events.precommit, &output_damage->output_precommit);
-	output_damage->output_precommit.notify = output_handle_precommit;
 	wl_signal_add(&output->events.commit, &output_damage->output_commit);
 	output_damage->output_commit.notify = output_handle_commit;
 
@@ -126,13 +112,12 @@ void wlr_output_damage_destroy(struct wlr_output_damage *output_damage) {
 	if (output_damage == NULL) {
 		return;
 	}
-	wlr_signal_emit_safe(&output_damage->events.destroy, output_damage);
+	wl_signal_emit_mutable(&output_damage->events.destroy, output_damage);
 	wl_list_remove(&output_damage->output_destroy.link);
 	wl_list_remove(&output_damage->output_mode.link);
 	wl_list_remove(&output_damage->output_needs_frame.link);
 	wl_list_remove(&output_damage->output_damage.link);
 	wl_list_remove(&output_damage->output_frame.link);
-	wl_list_remove(&output_damage->output_precommit.link);
 	wl_list_remove(&output_damage->output_commit.link);
 	pixman_region32_fini(&output_damage->current);
 	for (size_t i = 0; i < WLR_OUTPUT_DAMAGE_PREVIOUS_LEN; ++i) {
@@ -187,11 +172,17 @@ void wlr_output_damage_add(struct wlr_output_damage *output_damage,
 	int width, height;
 	wlr_output_transformed_resolution(output_damage->output, &width, &height);
 
-	pixman_region32_union(&output_damage->current, &output_damage->current,
-		damage);
-	pixman_region32_intersect_rect(&output_damage->current,
-		&output_damage->current, 0, 0, width, height);
-	wlr_output_schedule_frame(output_damage->output);
+	pixman_region32_t clipped_damage;
+	pixman_region32_init(&clipped_damage);
+	pixman_region32_intersect_rect(&clipped_damage, damage, 0, 0, width, height);
+
+	if (pixman_region32_not_empty(&clipped_damage)) {
+		pixman_region32_union(&output_damage->current, &output_damage->current,
+			&clipped_damage);
+		wlr_output_schedule_frame(output_damage->output);
+	}
+
+	pixman_region32_fini(&clipped_damage);
 }
 
 void wlr_output_damage_add_whole(struct wlr_output_damage *output_damage) {
@@ -206,12 +197,9 @@ void wlr_output_damage_add_whole(struct wlr_output_damage *output_damage) {
 
 void wlr_output_damage_add_box(struct wlr_output_damage *output_damage,
 		struct wlr_box *box) {
-	int width, height;
-	wlr_output_transformed_resolution(output_damage->output, &width, &height);
-
-	pixman_region32_union_rect(&output_damage->current, &output_damage->current,
+	pixman_region32_t damage;
+	pixman_region32_init_rect(&damage,
 		box->x, box->y, box->width, box->height);
-	pixman_region32_intersect_rect(&output_damage->current,
-		&output_damage->current, 0, 0, width, height);
-	wlr_output_schedule_frame(output_damage->output);
+	wlr_output_damage_add(output_damage, &damage);
+	pixman_region32_fini(&damage);
 }

@@ -1,6 +1,6 @@
 glesv2 = dependency('glesv2', required: 'gles2' in renderers)
 
-if not (glesv2.found() and egl.found())
+if not (glesv2.found() and internal_features['egl'])
 	subdir_done()
 endif
 
@@ -10,6 +10,7 @@ wlr_deps += glesv2
 wlr_files += files(
 	'pixel_format.c',
 	'renderer.c',
-	'shaders.c',
 	'texture.c',
 )
+
+subdir('shaders')

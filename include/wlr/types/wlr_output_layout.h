@@ -15,19 +15,17 @@
 #include <wlr/util/addon.h>
 
 struct wlr_box;
-struct wlr_output_layout_state;
 
 /**
  * Helper to arrange outputs in a 2D coordinate space. The output effective
- * resolution is used, see wlr_output_effective_resolution.
+ * resolution is used, see wlr_output_effective_resolution().
  *
  * Outputs added to the output layout are automatically exposed to clients (see
- * wlr_output_create_global). They are no longer exposed when removed from the
+ * wlr_output_create_global()). They are no longer exposed when removed from the
  * layout.
  */
 struct wlr_output_layout {
 	struct wl_list outputs;
-	struct wlr_output_layout_state *state;
 
 	struct {
 		struct wl_signal add;
@@ -107,17 +105,17 @@ void wlr_output_layout_closest_point(struct wlr_output_layout *layout,
 /**
  * Get the box of the layout for the given reference output in layout
  * coordinates. If `reference` is NULL, the box will be for the extents of the
- * entire layout.
+ * entire layout. If the output isn't in the layout, the box will be empty.
  */
-struct wlr_box *wlr_output_layout_get_box(
-		struct wlr_output_layout *layout, struct wlr_output *reference);
+void wlr_output_layout_get_box(struct wlr_output_layout *layout,
+		struct wlr_output *reference, struct wlr_box *dest_box);
 
 /**
 * Add an auto configured output to the layout. This will place the output in a
 * sensible location in the layout. The coordinates of the output in the layout
 * may adjust dynamically when the layout changes. If the output is already in
 * the layout, it will become auto configured. If the position of the output is
-* set such as with `wlr_output_layout_move()`, the output will become manually
+* set such as with wlr_output_layout_move(), the output will become manually
 * configured.
 */
 void wlr_output_layout_add_auto(struct wlr_output_layout *layout,

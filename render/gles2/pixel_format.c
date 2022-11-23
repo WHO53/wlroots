@@ -93,11 +93,29 @@ static const struct wlr_gles2_pixel_format formats[] = {
 		.gl_type = GL_HALF_FLOAT_OES,
 		.has_alpha = true,
 	},
+	{
+		.drm_format = DRM_FORMAT_XBGR16161616,
+		.gl_internalformat = GL_RGBA16_EXT,
+		.gl_format = GL_RGBA,
+		.gl_type = GL_UNSIGNED_SHORT,
+		.has_alpha = false,
+	},
+	{
+		.drm_format = DRM_FORMAT_ABGR16161616,
+		.gl_internalformat = GL_RGBA16_EXT,
+		.gl_format = GL_RGBA,
+		.gl_type = GL_UNSIGNED_SHORT,
+		.has_alpha = true,
+	},
 #endif
 };
 
 // TODO: more pixel formats
 
+/*
+ * Return true if supported for texturing, even if other operations like
+ * reading aren't supported.
+ */
 bool is_gles2_pixel_format_supported(const struct wlr_gles2_renderer *renderer,
 		const struct wlr_gles2_pixel_format *format) {
 	if (format->gl_type == GL_UNSIGNED_INT_2_10_10_10_REV_EXT
@@ -108,10 +126,16 @@ bool is_gles2_pixel_format_supported(const struct wlr_gles2_renderer *renderer,
 			&& !renderer->exts.OES_texture_half_float_linear) {
 		return false;
 	}
-	if (format->gl_format == GL_BGRA_EXT
-			&& !renderer->exts.EXT_read_format_bgra) {
+	if (format->gl_type == GL_UNSIGNED_SHORT
+			&& !renderer->exts.EXT_texture_norm16) {
 		return false;
 	}
+	/*
+	 * Note that we don't need to check for GL_EXT_texture_format_BGRA8888
+	 * here, since we've already checked if we have it at renderer creation
+	 * time and bailed out if not. We do the check there because Wayland
+	 * requires all compositors to support SHM buffers in that format.
+	 */
 	return true;
 }
 

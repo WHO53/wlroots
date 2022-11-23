@@ -22,6 +22,9 @@ struct wlr_shm_client_buffer {
 	struct wl_listener release;
 };
 
+struct wlr_shm_client_buffer *shm_client_buffer_get_or_create(
+	struct wl_resource *resource);
+
 /**
  * A read-only buffer that holds a data pointer.
  *
@@ -68,5 +71,14 @@ struct wlr_dmabuf_buffer *dmabuf_buffer_create(
  * consumer still has the buffer locked.
  */
 bool dmabuf_buffer_drop(struct wlr_dmabuf_buffer *buffer);
+
+/**
+ * Check whether a buffer is fully opaque.
+ *
+ * When true is returned, the buffer is guaranteed to be fully opaque, but the
+ * reverse is not true: false may be returned in cases where the buffer is fully
+ * opaque.
+ */
+bool buffer_is_opaque(struct wlr_buffer *buffer);
 
 #endif

@@ -115,8 +115,10 @@ static bool legacy_crtc_commit(struct wlr_drm_connector *conn,
 		}
 	}
 
-	if ((state->base->committed & WLR_OUTPUT_STATE_ADAPTIVE_SYNC_ENABLED) &&
-			drm_connector_supports_vrr(conn)) {
+	if (state->base->committed & WLR_OUTPUT_STATE_ADAPTIVE_SYNC_ENABLED) {
+		if (!drm_connector_supports_vrr(conn)) {
+			return false;
+		}
 		if (drmModeObjectSetProperty(drm->fd, crtc->id, DRM_MODE_OBJECT_CRTC,
 				crtc->props.vrr_enabled,
 				state->base->adaptive_sync_enabled) != 0) {
@@ -151,14 +153,18 @@ static bool legacy_crtc_commit(struct wlr_drm_connector *conn,
 
 		int ret = drmModeSetCursor(drm->fd, crtc->id, cursor_handle,
 			cursor_width, cursor_height);
-		close_bo_handle(drm->fd, cursor_handle);
+		int set_cursor_errno = errno;
+		if (drmCloseBufferHandle(drm->fd, cursor_handle) != 0) {
+			wlr_log_errno(WLR_ERROR, "drmCloseBufferHandle failed");
+		}
 		if (ret != 0) {
-			wlr_drm_conn_log_errno(conn, WLR_DEBUG, "drmModeSetCursor failed");
+			wlr_drm_conn_log(conn, WLR_DEBUG, "drmModeSetCursor failed: %s",
+				strerror(set_cursor_errno));
 			return false;
 		}
 
 		if (drmModeMoveCursor(drm->fd,
-			crtc->id, conn->cursor_x, conn->cursor_y) != 0) {
+				crtc->id, conn->cursor_x, conn->cursor_y) != 0) {
 			wlr_drm_conn_log_errno(conn, WLR_ERROR, "drmModeMoveCursor failed");
 			return false;
 		}

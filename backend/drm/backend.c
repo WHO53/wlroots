@@ -12,7 +12,6 @@
 #include <wlr/util/log.h>
 #include <xf86drm.h>
 #include "backend/drm/drm.h"
-#include "util/signal.h"
 
 struct wlr_drm_backend *get_drm_backend_from_backend(
 		struct wlr_backend *wlr_backend) {
@@ -22,7 +21,7 @@ struct wlr_drm_backend *get_drm_backend_from_backend(
 
 static bool backend_start(struct wlr_backend *backend) {
 	struct wlr_drm_backend *drm = get_drm_backend_from_backend(backend);
-	scan_drm_connectors(drm);
+	scan_drm_connectors(drm, NULL);
 	return true;
 }
 
@@ -102,7 +101,7 @@ static void handle_session_active(struct wl_listener *listener, void *data) {
 
 	if (session->active) {
 		wlr_log(WLR_INFO, "DRM fd resumed");
-		scan_drm_connectors(drm);
+		scan_drm_connectors(drm, NULL);
 
 		struct wlr_drm_connector *conn;
 		wl_list_for_each(conn, &drm->outputs, link) {
@@ -114,11 +113,14 @@ static void handle_session_active(struct wl_listener *listener, void *data) {
 			}
 			struct wlr_output_state state = {
 				.committed = committed,
+				.allow_artifacts = true,
 				.enabled = mode != NULL,
 				.mode_type = WLR_OUTPUT_STATE_MODE_FIXED,
 				.mode = mode,
 			};
-			drm_connector_commit_state(conn, &state);
+			if (!drm_connector_commit_state(conn, &state)) {
+				wlr_drm_conn_log(conn, WLR_ERROR, "Failed to restore state after VT switch");
+			}
 		}
 	} else {
 		wlr_log(WLR_INFO, "DRM fd paused");
@@ -127,13 +129,24 @@ static void handle_session_active(struct wl_listener *listener, void *data) {
 
 static void handle_dev_change(struct wl_listener *listener, void *data) {
 	struct wlr_drm_backend *drm = wl_container_of(listener, drm, dev_change);
+	struct wlr_device_change_event *change = data;
 
 	if (!drm->session->active) {
 		return;
 	}
 
-	wlr_log(WLR_DEBUG, "%s invalidated", drm->name);
-	scan_drm_connectors(drm);
+	switch (change->type) {
+	case WLR_DEVICE_HOTPLUG:
+		wlr_log(WLR_DEBUG, "Received hotplug event for %s", drm->name);
+		scan_drm_connectors(drm, &change->hotplug);
+		break;
+	case WLR_DEVICE_LEASE:
+		wlr_log(WLR_DEBUG, "Received lease event for %s", drm->name);
+		scan_drm_leases(drm);
+		break;
+	default:
+		wlr_log(WLR_DEBUG, "Received unknown change event for %s", drm->name);
+	}
 }
 
 static void handle_dev_remove(struct wl_listener *listener, void *data) {
@@ -224,10 +237,6 @@ struct wlr_backend *wlr_drm_backend_create(struct wl_display *display,
 	}
 
 	if (drm->parent) {
-		// Ensure we use the same renderer as the parent backend
-		drm->backend.renderer = wlr_backend_get_renderer(&drm->parent->backend);
-		assert(drm->backend.renderer != NULL);
-
 		if (!init_drm_renderer(drm, &drm->mgpu_renderer)) {
 			wlr_log(WLR_ERROR, "Failed to initialize renderer");
 			goto error_resources;
@@ -243,15 +252,17 @@ struct wlr_backend *wlr_drm_backend_create(struct wl_display *display,
 			goto error_mgpu_renderer;
 		}
 
-		// Force a linear layout. In case explicit modifiers aren't supported,
-		// the meaning of implicit modifiers changes from one GPU to the other.
-		// In case explicit modifiers are supported, we still have no guarantee
-		// that the buffer producer will support these, so they might fallback
-		// to implicit modifiers.
+		// Forbid implicit modifiers, because their meaning changes from one
+		// GPU to another.
 		for (size_t i = 0; i < texture_formats->len; i++) {
 			const struct wlr_drm_format *fmt = texture_formats->formats[i];
-			wlr_drm_format_set_add(&drm->mgpu_formats, fmt->format,
-				DRM_FORMAT_MOD_LINEAR);
+			for (size_t j = 0; j < fmt->len; j++) {
+				uint64_t mod = fmt->modifiers[j];
+				if (mod == DRM_FORMAT_MOD_INVALID) {
+					continue;
+				}
+				wlr_drm_format_set_add(&drm->mgpu_formats, fmt->format, mod);
+			}
 		}
 	}
 

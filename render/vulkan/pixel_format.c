@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <vulkan/vulkan.h>
 #include <wlr/util/log.h>
+#include <xf86drm.h>
 #include "render/vulkan.h"
 
 // Reversed endianess of shm and vulkan format names
@@ -39,7 +40,8 @@ const struct wlr_vk_format *vulkan_get_format_from_drm(uint32_t drm_format) {
 }
 
 static const VkImageUsageFlags render_usage =
-	VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+	VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+	VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 static const VkImageUsageFlags tex_usage =
 	VK_IMAGE_USAGE_SAMPLED_BIT |
 	VK_IMAGE_USAGE_TRANSFER_DST_BIT;
@@ -134,9 +136,7 @@ static bool query_modifier_support(struct wlr_vk_device *dev,
 	for (unsigned i = 0u; i < modp.drmFormatModifierCount; ++i) {
 		VkDrmFormatModifierPropertiesEXT m =
 			modp.pDrmFormatModifierProperties[i];
-		wlr_log(WLR_DEBUG, "  modifier: 0x%"PRIx64 ": features 0x%"PRIx32", %d planes",
-			m.drmFormatModifier, m.drmFormatModifierTilingFeatures,
-			m.drmFormatModifierPlaneCount);
+		const char *render_status, *texture_status;
 
 		// check that specific modifier for render usage
 		if ((m.drmFormatModifierTilingFeatures & render_features) == render_features) {
@@ -151,7 +151,7 @@ static bool query_modifier_support(struct wlr_vk_device *dev,
 						res);
 				}
 
-				wlr_log(WLR_DEBUG, "    >> rendering: format not supported");
+				render_status = "✗ render (unsupported format)";
 			} else if (emp->externalMemoryFeatures &
 					VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT) {
 				unsigned c = props->render_mod_count;
@@ -170,12 +170,12 @@ static bool query_modifier_support(struct wlr_vk_device *dev,
 				wlr_drm_format_set_add(&dev->dmabuf_render_formats,
 					props->format.drm_format, m.drmFormatModifier);
 
-				wlr_log(WLR_DEBUG, "    >> rendering: supported");
+				render_status = "✓ render";
 			} else {
-				wlr_log(WLR_DEBUG, "    >> rendering: importing not supported");
+				render_status = "✗ render (import not supported)";
 			}
 		} else {
-			wlr_log(WLR_DEBUG, "    >> rendering: format features not supported");
+			render_status = "✗ render (missing required features)";
 		}
 
 		// check that specific modifier for texture usage
@@ -191,7 +191,7 @@ static bool query_modifier_support(struct wlr_vk_device *dev,
 						res);
 				}
 
-				wlr_log(WLR_DEBUG, "    >> dmatex: format not supported");
+				texture_status = "✗ texture (unsupported format)";
 			} else if (emp->externalMemoryFeatures &
 					VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT) {
 				unsigned c = props->texture_mod_count;
@@ -210,13 +210,20 @@ static bool query_modifier_support(struct wlr_vk_device *dev,
 				wlr_drm_format_set_add(&dev->dmabuf_texture_formats,
 					props->format.drm_format, m.drmFormatModifier);
 
-				wlr_log(WLR_DEBUG, "    >> dmatex: supported");
+				texture_status = "✓ texture";
 			} else {
-				wlr_log(WLR_DEBUG, "    >> dmatex: importing not supported");
+				texture_status = "✗ texture (import not supported)";
 			}
 		} else {
-			wlr_log(WLR_DEBUG, "    >> dmatex: format features not supported");
+			texture_status = "✗ texture (missing required features)";
 		}
+
+		char *modifier_name = drmGetFormatModifierName(m.drmFormatModifier);
+		wlr_log(WLR_DEBUG, "    DMA-BUF modifier %s "
+			"(0x%016"PRIX64", %"PRIu32" planes): %s  %s",
+			modifier_name ? modifier_name : "<unknown>", m.drmFormatModifier,
+			m.drmFormatModifierPlaneCount, texture_status, render_status);
+		free(modifier_name);
 	}
 
 	free(modp.pDrmFormatModifierProperties);
@@ -225,10 +232,12 @@ static bool query_modifier_support(struct wlr_vk_device *dev,
 
 void vulkan_format_props_query(struct wlr_vk_device *dev,
 		const struct wlr_vk_format *format) {
-
-	wlr_log(WLR_DEBUG, "vulkan: Checking support for format %.4s (0x%" PRIx32 ")",
-		(const char *)&format->drm_format, format->drm_format);
 	VkResult res;
+
+	char *format_name = drmGetFormatName(format->drm_format);
+	wlr_log(WLR_DEBUG, "  %s (0x%08"PRIX32")",
+		format_name ? format_name : "<unknown>", format->drm_format);
+	free(format_name);
 
 	// get general features and modifiers
 	VkFormatProperties2 fmtp = {0};
@@ -254,14 +263,9 @@ void vulkan_format_props_query(struct wlr_vk_device *dev,
 	struct wlr_vk_format_props props = {0};
 	props.format = *format;
 
-	wlr_log(WLR_DEBUG, "  drmFormatModifierCount: %d", modp.drmFormatModifierCount);
-	if (modp.drmFormatModifierCount > 0) {
-		add_fmt_props |= query_modifier_support(dev, &props,
-			modp.drmFormatModifierCount, fmti);
-	}
-
 	// non-dmabuf texture properties
-	if (fmtp.formatProperties.optimalTilingFeatures & tex_features) {
+	const char *shm_texture_status;
+	if ((fmtp.formatProperties.optimalTilingFeatures & tex_features) == tex_features) {
 		fmti.pNext = NULL;
 		ifmtp.pNext = NULL;
 		fmti.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -275,14 +279,14 @@ void vulkan_format_props_query(struct wlr_vk_device *dev,
 					res);
 			}
 
-			wlr_log(WLR_DEBUG, " >> shmtex: format not supported");
+			shm_texture_status = "✗ texture (unsupported format)";
 		} else {
 			VkExtent3D me = ifmtp.imageFormatProperties.maxExtent;
 			props.max_extent.width = me.width;
 			props.max_extent.height = me.height;
 			props.features = fmtp.formatProperties.optimalTilingFeatures;
 
-			wlr_log(WLR_DEBUG, " >> shmtex: supported");
+			shm_texture_status = "✓ texture";
 
 			dev->shm_formats[dev->shm_format_count] = format->drm_format;
 			++dev->shm_format_count;
@@ -290,12 +294,20 @@ void vulkan_format_props_query(struct wlr_vk_device *dev,
 			add_fmt_props = true;
 		}
 	} else {
-		wlr_log(WLR_DEBUG, " >> shmtex: format features not supported");
+		shm_texture_status = "✗ texture (missing required features)";
+	}
+	wlr_log(WLR_DEBUG, "    Shared memory: %s", shm_texture_status);
+
+	if (modp.drmFormatModifierCount > 0) {
+		add_fmt_props |= query_modifier_support(dev, &props,
+			modp.drmFormatModifierCount, fmti);
 	}
 
 	if (add_fmt_props) {
 		dev->format_props[dev->format_prop_count] = props;
 		++dev->format_prop_count;
+	} else {
+		vulkan_format_props_finish(&props);
 	}
 }
 

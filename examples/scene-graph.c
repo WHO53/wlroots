@@ -8,11 +8,11 @@
 #include <unistd.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
+#include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_scene.h>
-#include <wlr/types/wlr_surface.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
 
@@ -25,10 +25,11 @@ static const int border_width = 3;
 struct server {
 	struct wl_display *display;
 	struct wlr_backend *backend;
+	struct wlr_renderer *renderer;
+	struct wlr_allocator *allocator;
 	struct wlr_scene *scene;
 
-	struct wl_list outputs;
-	struct wl_list surfaces;
+	uint32_t surface_offset;
 
 	struct wl_listener new_output;
 	struct wl_listener new_surface;
@@ -62,16 +63,14 @@ static void output_handle_frame(struct wl_listener *listener, void *data) {
 
 	struct timespec now;
 	clock_gettime(CLOCK_MONOTONIC, &now);
-
-	struct surface *surface;
-	wl_list_for_each(surface, &output->server->surfaces, link) {
-		wlr_surface_send_frame_done(surface->wlr, &now);
-	}
+	wlr_scene_output_send_frame_done(output->scene_output, &now);
 }
 
 static void server_handle_new_output(struct wl_listener *listener, void *data) {
 	struct server *server = wl_container_of(listener, server, new_output);
 	struct wlr_output *wlr_output = data;
+
+	wlr_output_init_render(wlr_output, server->allocator, server->renderer);
 
 	struct output *output =
 		calloc(1, sizeof(struct output));
@@ -79,7 +78,6 @@ static void server_handle_new_output(struct wl_listener *listener, void *data) {
 	output->server = server;
 	output->frame.notify = output_handle_frame;
 	wl_signal_add(&wlr_output->events.frame, &output->frame);
-	wl_list_insert(&server->outputs, &output->link);
 
 	output->scene_output = wlr_scene_output_create(server->scene, wlr_output);
 
@@ -101,7 +99,7 @@ static void surface_handle_commit(struct wl_listener *listener, void *data) {
 
 static void surface_handle_destroy(struct wl_listener *listener, void *data) {
 	struct surface *surface = wl_container_of(listener, surface, destroy);
-	wlr_scene_node_destroy(&surface->scene_surface->node);
+	wlr_scene_node_destroy(&surface->scene_surface->buffer->node);
 	wlr_scene_node_destroy(&surface->border->node);
 	wl_list_remove(&surface->destroy.link);
 	wl_list_remove(&surface->link);
@@ -113,7 +111,8 @@ static void server_handle_new_surface(struct wl_listener *listener,
 	struct server *server = wl_container_of(listener, server, new_surface);
 	struct wlr_surface *wlr_surface = data;
 
-	int pos = 50 * wl_list_length(&server->surfaces);
+	int pos = server->surface_offset;
+	server->surface_offset += 50;
 
 	struct surface *surface = calloc(1, sizeof(struct surface));
 	surface->wlr = wlr_surface;
@@ -123,15 +122,14 @@ static void server_handle_new_surface(struct wl_listener *listener,
 	wl_signal_add(&wlr_surface->events.destroy, &surface->destroy);
 
 	/* Border dimensions will be set in surface.commit handler */
-	surface->border = wlr_scene_rect_create(&server->scene->node,
+	surface->border = wlr_scene_rect_create(&server->scene->tree,
 			0, 0, (float[4]){ 0.5f, 0.5f, 0.5f, 1 });
 	wlr_scene_node_set_position(&surface->border->node, pos, pos);
 
 	surface->scene_surface =
-		wlr_scene_surface_create(&server->scene->node, wlr_surface);
-	wl_list_insert(server->surfaces.prev, &surface->link);
+		wlr_scene_surface_create(&server->scene->tree, wlr_surface);
 
-	wlr_scene_node_set_position(&surface->scene_surface->node,
+	wlr_scene_node_set_position(&surface->scene_surface->buffer->node,
 			pos + border_width, pos + border_width);
 }
 
@@ -157,20 +155,21 @@ int main(int argc, char *argv[]) {
 	}
 
 	struct server server = {0};
+	server.surface_offset = 0;
 	server.display = wl_display_create();
 	server.backend = wlr_backend_autocreate(server.display);
 	server.scene = wlr_scene_create();
 
-	struct wlr_renderer *renderer = wlr_backend_get_renderer(server.backend);
-	wlr_renderer_init_wl_display(renderer, server.display);
+	server.renderer = wlr_renderer_autocreate(server.backend);
+	wlr_renderer_init_wl_display(server.renderer, server.display);
+
+	server.allocator = wlr_allocator_autocreate(server.backend,
+		server.renderer);
 
 	struct wlr_compositor *compositor =
-		wlr_compositor_create(server.display, renderer);
+		wlr_compositor_create(server.display, server.renderer);
 
-	wlr_xdg_shell_create(server.display);
-
-	wl_list_init(&server.outputs);
-	wl_list_init(&server.surfaces);
+	wlr_xdg_shell_create(server.display, 2);
 
 	server.new_output.notify = server_handle_new_output;
 	wl_signal_add(&server.backend->events.new_output, &server.new_output);

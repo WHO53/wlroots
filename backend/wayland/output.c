@@ -19,7 +19,6 @@
 #include "render/pixel_format.h"
 #include "render/swapchain.h"
 #include "render/wlr_renderer.h"
-#include "util/signal.h"
 
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
 #include "presentation-time-client-protocol.h"
@@ -30,7 +29,10 @@
 static const uint32_t SUPPORTED_OUTPUT_STATE =
 	WLR_OUTPUT_STATE_BACKEND_OPTIONAL |
 	WLR_OUTPUT_STATE_BUFFER |
-	WLR_OUTPUT_STATE_MODE;
+	WLR_OUTPUT_STATE_MODE |
+	WLR_OUTPUT_STATE_ADAPTIVE_SYNC_ENABLED;
+
+static size_t last_output_num = 0;
 
 static struct wlr_wl_output *get_wl_output_from_output(
 		struct wlr_output *wlr_output) {
@@ -107,12 +109,6 @@ static const struct wp_presentation_feedback_listener
 	.discarded = presentation_feedback_handle_discarded,
 };
 
-static bool output_set_custom_mode(struct wlr_output *wlr_output,
-		int32_t width, int32_t height, int32_t refresh) {
-	wlr_output_update_custom_mode(wlr_output, width, height, 0);
-	return true;
-}
-
 void destroy_wl_buffer(struct wlr_wl_buffer *buffer) {
 	if (buffer == NULL) {
 		return;
@@ -166,18 +162,8 @@ static struct wl_buffer *import_dmabuf(struct wlr_wl_backend *wl,
 			dmabuf->offset[i], dmabuf->stride[i], modifier_hi, modifier_lo);
 	}
 
-	uint32_t flags = 0;
-	if (dmabuf->flags & WLR_DMABUF_ATTRIBUTES_FLAGS_Y_INVERT) {
-		flags |= ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_Y_INVERT;
-	}
-	if (dmabuf->flags & WLR_DMABUF_ATTRIBUTES_FLAGS_INTERLACED) {
-		flags |= ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_INTERLACED;
-	}
-	if (dmabuf->flags & WLR_DMABUF_ATTRIBUTES_FLAGS_BOTTOM_FIRST) {
-		flags |= ZWP_LINUX_BUFFER_PARAMS_V1_FLAGS_BOTTOM_FIRST;
-	}
 	struct wl_buffer *wl_buffer = zwp_linux_buffer_params_v1_create_immed(
-		params, dmabuf->width, dmabuf->height, dmabuf->format, flags);
+		params, dmabuf->width, dmabuf->height, dmabuf->format, 0);
 	// TODO: handle create() errors
 	return wl_buffer;
 }
@@ -250,48 +236,55 @@ static struct wlr_wl_buffer *get_or_create_wl_buffer(struct wlr_wl_backend *wl,
 	return create_wl_buffer(wl, wlr_buffer);
 }
 
-static bool output_test(struct wlr_output *wlr_output) {
+static bool output_test(struct wlr_output *wlr_output,
+		const struct wlr_output_state *state) {
 	struct wlr_wl_output *output =
 		get_wl_output_from_output(wlr_output);
 
-	uint32_t unsupported =
-		wlr_output->pending.committed & ~SUPPORTED_OUTPUT_STATE;
+	uint32_t unsupported = state->committed & ~SUPPORTED_OUTPUT_STATE;
 	if (unsupported != 0) {
 		wlr_log(WLR_DEBUG, "Unsupported output state fields: 0x%"PRIx32,
 			unsupported);
 		return false;
 	}
 
-	if (wlr_output->pending.committed & WLR_OUTPUT_STATE_MODE) {
-		assert(wlr_output->pending.mode_type == WLR_OUTPUT_STATE_MODE_CUSTOM);
+	// Adaptive sync is effectively always enabled when using the Wayland
+	// backend. This is not something we have control over, so we set the state
+	// to enabled on creating the output and never allow changing it.
+	assert(wlr_output->adaptive_sync_status == WLR_OUTPUT_ADAPTIVE_SYNC_ENABLED);
+	if (state->committed & WLR_OUTPUT_STATE_ADAPTIVE_SYNC_ENABLED) {
+		if (!state->adaptive_sync_enabled) {
+			return false;
+		}
 	}
 
-	if ((wlr_output->pending.committed & WLR_OUTPUT_STATE_BUFFER) &&
-			!test_buffer(output->backend, wlr_output->pending.buffer)) {
+	if (state->committed & WLR_OUTPUT_STATE_MODE) {
+		assert(state->mode_type == WLR_OUTPUT_STATE_MODE_CUSTOM);
+	}
+
+	if ((state->committed & WLR_OUTPUT_STATE_BUFFER) &&
+			!test_buffer(output->backend, state->buffer)) {
 		return false;
 	}
 
 	return true;
 }
 
-static bool output_commit(struct wlr_output *wlr_output) {
+static bool output_commit(struct wlr_output *wlr_output,
+		const struct wlr_output_state *state) {
 	struct wlr_wl_output *output =
 		get_wl_output_from_output(wlr_output);
 
-	if (!output_test(wlr_output)) {
+	if (!output_test(wlr_output, state)) {
 		return false;
 	}
 
-	if (wlr_output->pending.committed & WLR_OUTPUT_STATE_MODE) {
-		if (!output_set_custom_mode(wlr_output,
-				wlr_output->pending.custom_mode.width,
-				wlr_output->pending.custom_mode.height,
-				wlr_output->pending.custom_mode.refresh)) {
-			return false;
-		}
+	if (state->committed & WLR_OUTPUT_STATE_MODE) {
+		wlr_output_update_custom_mode(wlr_output,
+			state->custom_mode.width, state->custom_mode.height, 0);
 	}
 
-	if (wlr_output->pending.committed & WLR_OUTPUT_STATE_BUFFER) {
+	if (state->committed & WLR_OUTPUT_STATE_BUFFER) {
 		struct wp_presentation_feedback *wp_feedback = NULL;
 		if (output->backend->presentation != NULL) {
 			wp_feedback = wp_presentation_feedback(output->backend->presentation,
@@ -299,8 +292,8 @@ static bool output_commit(struct wlr_output *wlr_output) {
 		}
 
 		pixman_region32_t *damage = NULL;
-		if (wlr_output->pending.committed & WLR_OUTPUT_STATE_DAMAGE) {
-			damage = &wlr_output->pending.damage;
+		if (state->committed & WLR_OUTPUT_STATE_DAMAGE) {
+			damage = (pixman_region32_t *) &state->damage;
 		}
 
 		if (output->frame_callback != NULL) {
@@ -311,7 +304,7 @@ static bool output_commit(struct wlr_output *wlr_output) {
 		output->frame_callback = wl_surface_frame(output->surface);
 		wl_callback_add_listener(output->frame_callback, &frame_listener, output);
 
-		struct wlr_buffer *wlr_buffer = wlr_output->pending.buffer;
+		struct wlr_buffer *wlr_buffer = state->buffer;
 		struct wlr_wl_buffer *buffer =
 			get_or_create_wl_buffer(output->backend, wlr_buffer);
 		if (buffer == NULL) {
@@ -446,7 +439,9 @@ void update_wl_output_cursor(struct wlr_wl_output *output) {
 	if (pointer) {
 		assert(pointer->output == output);
 		assert(output->enter_serial);
-		wl_pointer_set_cursor(pointer->wl_pointer, output->enter_serial,
+
+		struct wlr_wl_seat *seat = pointer->seat;
+		wl_pointer_set_cursor(seat->wl_pointer, output->enter_serial,
 			output->cursor.surface, output->cursor.hotspot_x,
 			output->cursor.hotspot_y);
 	}
@@ -494,8 +489,9 @@ static void xdg_toplevel_handle_configure(void *data,
 	if (width == 0 || height == 0) {
 		return;
 	}
-	// loop over states for maximized etc?
-	output_set_custom_mode(&output->wlr_output, width, height, 0);
+
+	// TODO: loop over states for maximized etc?
+	wlr_output_update_custom_mode(&output->wlr_output, width, height, 0);
 }
 
 static void xdg_toplevel_handle_close(void *data,
@@ -528,14 +524,17 @@ struct wlr_output *wlr_wl_output_create(struct wlr_backend *wlr_backend) {
 	struct wlr_output *wlr_output = &output->wlr_output;
 
 	wlr_output_update_custom_mode(wlr_output, 1280, 720, 0);
-	strncpy(wlr_output->make, "wayland", sizeof(wlr_output->make));
-	strncpy(wlr_output->model, "wayland", sizeof(wlr_output->model));
-	snprintf(wlr_output->name, sizeof(wlr_output->name), "WL-%zd",
-		++backend->last_output_num);
+
+	wlr_output->adaptive_sync_status = WLR_OUTPUT_ADAPTIVE_SYNC_ENABLED;
+
+	size_t output_num = ++last_output_num;
+
+	char name[64];
+	snprintf(name, sizeof(name), "WL-%zu", output_num);
+	wlr_output_set_name(wlr_output, name);
 
 	char description[128];
-	snprintf(description, sizeof(description),
-		"Wayland output %zd", backend->last_output_num);
+	snprintf(description, sizeof(description), "Wayland output %zu", output_num);
 	wlr_output_set_description(wlr_output, description);
 
 	output->backend = backend;
@@ -586,12 +585,12 @@ struct wlr_output *wlr_wl_output_create(struct wlr_backend *wlr_backend) {
 	wl_list_insert(&backend->outputs, &output->link);
 	wlr_output_update_enabled(wlr_output, true);
 
-	wlr_signal_emit_safe(&backend->backend.events.new_output, wlr_output);
+	wl_signal_emit_mutable(&backend->backend.events.new_output, wlr_output);
 
 	struct wlr_wl_seat *seat;
 	wl_list_for_each(seat, &backend->seats, link) {
-		if (seat->pointer) {
-			create_wl_pointer(seat, output);
+		if (seat->wl_pointer) {
+			create_pointer(seat, output);
 		}
 	}
 
