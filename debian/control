@@ -36,7 +36,7 @@ Build-Depends:
  xwayland,
 Standards-Version: 4.6.0
 Section: libs
-Homepage: https://github.com/swaywm/wlroots
+Homepage: https://gitlab.freedesktop.org/wlroots/wlroots/
 Vcs-Git: https://salsa.debian.org/swaywm-team/wlroots.git
 Vcs-Browser: https://salsa.debian.org/swaywm-team/wlroots
 Rules-Requires-Root: no
@@ -74,7 +74,7 @@ Depends:
  wayland-protocols (>= 1.24),
 Description: Modular wayland compositor library - development headers
  wlroots is a set of pluggable, composable modules to build a Wayland
- composior.
+ compositor.
  .
  This package contains the development headers.
 

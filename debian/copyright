@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: wlroots
-Source: https://github.com/swaywm/wlroots
+Source: https://gitlab.freedesktop.org/wlroots/wlroots/
 
 Files: *
 Copyright: 2017-2019, Drew DeVault
