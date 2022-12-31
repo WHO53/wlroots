@@ -4,6 +4,7 @@ Maintainer: Sway and related packages team <team+swaywm@tracker.debian.org>
 Uploaders: Guido Günther <agx@sigxcpu.org>, Birger Schacht <birger@rantanplan.org>
 Build-Depends:
  debhelper-compat (= 13),
+ glslang-tools,
  hwdata,
  libavformat-dev,
  libavcodec-dev,
@@ -17,6 +18,7 @@ Build-Depends:
  libpng-dev,
  libseat-dev,
  libsystemd-dev,
+ libvulkan-dev,
  libwayland-dev (>= 1.20),
  libxcb1-dev,
  libxcb-composite0-dev,
