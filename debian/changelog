@@ -1,3 +1,9 @@
+wlroots (0.16.1-1) UNRELEASED; urgency=medium
+
+  * New upstream release
+
+ -- Guido Günther <agx@sigxcpu.org>  Tue, 17 Jan 2023 11:51:55 +0100
+
 wlroots (0.16.0-2) experimental; urgency=medium
 
   * [17dcb12] Fix compilation due to uninitialized values on some
