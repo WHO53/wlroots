@@ -75,6 +75,10 @@ static void seat_client_handle_resource_destroy(
 		client->seat->keyboard_state.focused_client = NULL;
 	}
 
+	if (client->seat->drag && client == client->seat->drag->seat_client) {
+		client->seat->drag->seat_client = NULL;
+	}
+
 	struct wl_resource *resource, *tmp;
 	wl_resource_for_each_safe(resource, tmp, &client->pointers) {
 		wl_resource_destroy(resource);
@@ -174,6 +178,8 @@ void wlr_seat_destroy(struct wlr_seat *seat) {
 
 	wlr_seat_pointer_clear_focus(seat);
 	wlr_seat_keyboard_clear_focus(seat);
+
+	wlr_seat_set_keyboard(seat, NULL);
 
 	struct wlr_touch_point *point;
 	wl_list_for_each(point, &seat->touch_state.touch_points, link) {
