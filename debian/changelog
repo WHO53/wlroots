@@ -1,8 +1,17 @@
-wlroots (0.16.1-1) UNRELEASED; urgency=medium
+wlroots (0.16.1-1) experimental; urgency=medium
 
+  [ Guido Günther ]
   * New upstream release
+    (Closes: #1027682)
+  * [cb91b99] Drop patches applied upstream
+  * [16358a9] Backport a patch from upstream's 0.16 branch
+    to fix an XWayland crash.
 
- -- Guido Günther <agx@sigxcpu.org>  Tue, 17 Jan 2023 11:51:55 +0100
+  [ Birger Schacht ]
+  * [fb08e6c] Add required Build-Dependencies to enable vulkan renderer
+    (Closes: #1028910)
+
+ -- Guido Günther <agx@sigxcpu.org>  Tue, 17 Jan 2023 11:57:52 +0100
 
 wlroots (0.16.0-2) experimental; urgency=medium
 
