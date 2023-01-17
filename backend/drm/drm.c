@@ -459,12 +459,6 @@ static bool drm_connector_test(struct wlr_output *output,
 		}
 	}
 
-	if ((state->committed & WLR_OUTPUT_ADAPTIVE_SYNC_ENABLED) &&
-			state->adaptive_sync_enabled &&
-			!drm_connector_supports_vrr(conn)) {
-		return false;
-	}
-
 	struct wlr_drm_connector_state pending = {0};
 	drm_connector_state_init(&pending, conn, state);
 
@@ -482,6 +476,12 @@ static bool drm_connector_test(struct wlr_output *output,
 				"No CRTC available for this connector");
 			return false;
 		}
+	}
+
+	if ((state->committed & WLR_OUTPUT_ADAPTIVE_SYNC_ENABLED) &&
+			state->adaptive_sync_enabled &&
+			!drm_connector_supports_vrr(conn)) {
+		return false;
 	}
 
 	if (conn->backend->parent) {
@@ -577,8 +577,18 @@ bool drm_connector_commit_state(struct wlr_drm_connector *conn,
 			return false;
 		}
 	}
-	if (pending.modeset) {
+	if (pending.modeset && pending.active) {
 		flags |= DRM_MODE_PAGE_FLIP_EVENT;
+	}
+
+	if (pending.modeset) {
+		if (pending.active) {
+			wlr_drm_conn_log(conn, WLR_INFO, "Modesetting with %dx%d @ %.3f Hz",
+				pending.mode.hdisplay, pending.mode.vdisplay,
+				(float)calculate_refresh_rate(&pending.mode) / 1000);
+		} else {
+			wlr_drm_conn_log(conn, WLR_INFO, "Turning off");
+		}
 	}
 
 	if (!drm_crtc_commit(conn, &pending, flags, false)) {
@@ -1302,9 +1312,9 @@ static void connect_drm_connector(struct wlr_drm_connector *wlr_conn,
 			wlr_conn->crtc->mode_id = mode_id;
 		}
 
-		wlr_log(WLR_INFO, "  %"PRId32"x%"PRId32"@%"PRId32" %s",
+		wlr_log(WLR_INFO, "  %"PRId32"x%"PRId32" @ %.3f Hz %s",
 			mode->wlr_mode.width, mode->wlr_mode.height,
-			mode->wlr_mode.refresh,
+			(float)mode->wlr_mode.refresh / 1000,
 			mode->wlr_mode.preferred ? "(preferred)" : "");
 
 		wl_list_insert(wlr_conn->output.modes.prev, &mode->wlr_mode.link);
