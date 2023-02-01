@@ -1,3 +1,12 @@
+wlroots (0.16.1-2) experimental; urgency=medium
+
+  * [d707bc2] libwlroots-dev: Depend on vulkan development package
+    (Closes: #1030240)
+  * [d4e58a8] Switch dependency from libegl1-mesa to libegl
+  * [19386fa] Bump standards version
+
+ -- Guido Günther <agx@sigxcpu.org>  Wed, 01 Feb 2023 16:57:22 +0100
+
 wlroots (0.16.1-1) experimental; urgency=medium
 
   [ Guido Günther ]
