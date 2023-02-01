@@ -60,6 +60,7 @@ Depends:
  libpixman-1-dev,
  libseat-dev,
  libsystemd-dev,
+ libvulkan-dev,
  libwayland-dev (>= 1.20),
  libxcb1-dev,
  libxcb-composite0-dev,
