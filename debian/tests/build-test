@@ -1,10 +1,12 @@
-#!/usr/bin/make -f
+#!/bin/sh
 
-CFLAGS=$(shell pkg-config --cflags wlroots)
-LIBS=$(shell pkg-config --libs wlroots)
+set -e
+set -u
+set -x
 
-a.out: debian/tests/test.c
-	gcc $(CFLAGS) $< $(LIBS) -lwayland-server
-	@echo "Build test of $< succeeded"
-	WLR_BACKENDS=headless ./a.out
-	@rm -f a.out
+CFLAGS=$(pkg-config --cflags wlroots)
+LIBS=$(pkg-config --libs wlroots && pkg-config --libs wayland-server)
+gcc ${CFLAGS} debian/tests/test.c ${LIBS}
+echo "Build test of $< succeeded"
+WLR_BACKENDS=headless ./a.out
+rm -f a.out
