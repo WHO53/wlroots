@@ -37,7 +37,7 @@ Build-Depends:
  pkg-config,
  wayland-protocols (>= 1.24),
  xwayland,
-Standards-Version: 4.6.0
+Standards-Version: 4.6.2
 Section: libs
 Homepage: https://gitlab.freedesktop.org/wlroots/wlroots/
 Vcs-Git: https://salsa.debian.org/swaywm-team/wlroots.git
