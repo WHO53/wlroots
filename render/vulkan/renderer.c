@@ -822,6 +822,10 @@ static void vulkan_clear(struct wlr_renderer *wlr_renderer,
 	struct wlr_vk_renderer *renderer = vulkan_get_renderer(wlr_renderer);
 	VkCommandBuffer cb = renderer->cb;
 
+	if (renderer->scissor.extent.width == 0 || renderer->scissor.extent.height == 0) {
+		return;
+	}
+
 	VkClearAttachment att = {
 		.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
 		.colorAttachment = 0u,
@@ -1123,11 +1127,6 @@ static bool vulkan_read_pixels(struct wlr_renderer *wlr_renderer,
 			VK_ACCESS_TRANSFER_READ_BIT);
 
 	if (blit_supported) {
-		VkOffset3D blit_size = {
-			.x = width,
-			.y = height,
-			.z = 1
-		};
 		VkImageBlit image_blit_region = {
 			.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
 			.srcSubresource.layerCount = 1,
@@ -1135,10 +1134,17 @@ static bool vulkan_read_pixels(struct wlr_renderer *wlr_renderer,
 				.x = src_x,
 				.y = src_y,
 			},
-			.srcOffsets[1] = blit_size,
+			.srcOffsets[1] = {
+				.x = src_x + width,
+				.y = src_y + height,
+			},
 			.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
 			.dstSubresource.layerCount = 1,
-			.dstOffsets[1] = blit_size
+			.dstOffsets[1] = {
+				.x = width,
+				.y = height,
+				.z = 1,
+			}
 		};
 		vkCmdBlitImage(cb, src_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 				dst_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,

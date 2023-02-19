@@ -43,7 +43,12 @@ static struct wlr_wl_output *get_wl_output_from_output(
 static void surface_frame_callback(void *data, struct wl_callback *cb,
 		uint32_t time) {
 	struct wlr_wl_output *output = data;
-	assert(output);
+
+	if (cb == NULL) {
+		return;
+	}
+
+	assert(output->frame_callback == cb);
 	wl_callback_destroy(cb);
 	output->frame_callback = NULL;
 
@@ -282,11 +287,6 @@ static bool output_commit(struct wlr_output *wlr_output,
 		return false;
 	}
 
-	if (state->committed & WLR_OUTPUT_STATE_MODE) {
-		wlr_output_update_custom_mode(wlr_output,
-			state->custom_mode.width, state->custom_mode.height, 0);
-	}
-
 	if (state->committed & WLR_OUTPUT_STATE_BUFFER) {
 		struct wp_presentation_feedback *wp_feedback = NULL;
 		if (output->backend->presentation != NULL) {
@@ -300,10 +300,8 @@ static bool output_commit(struct wlr_output *wlr_output,
 		}
 
 		if (output->frame_callback != NULL) {
-			wlr_log(WLR_ERROR, "Skipping buffer swap");
-			return false;
+			wl_callback_destroy(output->frame_callback);
 		}
-
 		output->frame_callback = wl_surface_frame(output->surface);
 		wl_callback_add_listener(output->frame_callback, &frame_listener, output);
 
@@ -356,6 +354,11 @@ static bool output_commit(struct wlr_output *wlr_output,
 	}
 
 	wl_display_flush(output->backend->remote_display);
+
+	if (state->committed & WLR_OUTPUT_STATE_MODE) {
+		wlr_output_update_custom_mode(wlr_output,
+			state->custom_mode.width, state->custom_mode.height, 0);
+	}
 
 	return true;
 }
