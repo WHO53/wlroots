@@ -1,3 +1,9 @@
+wlroots (0.16.2-1) UNRELEASED; urgency=medium
+
+  * New upstream release
+
+ -- Guido Günther <agx@sigxcpu.org>  Sun, 19 Feb 2023 15:19:59 +0100
+
 wlroots (0.16.1-2) experimental; urgency=medium
 
   * [d707bc2] libwlroots-dev: Depend on vulkan development package
