@@ -103,5 +103,4 @@ Description: Modular wayland compositor library - binaries
  wlroots is a set of pluggable, composable modules to build a Wayland
  composior.
  .
- This package contains the reference compositor rootston and other
- examples.
+ This package contains various examples on how to use wlroots.
