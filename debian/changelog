@@ -1,3 +1,15 @@
+wlroots (0.16.2-3) unstable; urgency=medium
+
+  [ Diederik de Haas ]
+  * [dd75d42] d/control: Update libwlroots-examples description.
+    Upstream commit 58b2584863201f32d1a4770a1d5cde5e57b300c6 removed the
+    rootston compositor, so remove it from the package description too.
+    (Closes: #1027926)
+  * [4de9500] d/patches: Backport upstream patch to fix FTBFS with ffmpeg 6.0
+    (Closes: #1041493)
+
+ -- Guido Günther <agx@sigxcpu.org>  Thu, 03 Aug 2023 21:25:19 +0200
+
 wlroots (0.16.2-2) unstable; urgency=medium
 
   * Upload to unstable
