@@ -47,7 +47,7 @@ struct fullscreen_output {
 
 struct render_data {
 	struct wlr_output *output;
-	struct wlr_renderer *renderer;
+	struct wlr_render_pass *render_pass;
 	struct timespec *when;
 };
 
@@ -68,13 +68,14 @@ static void render_surface(struct wlr_surface *surface,
 		.height = surface->current.height * output->scale,
 	};
 
-	float matrix[9];
-	enum wl_output_transform transform =
-		wlr_output_transform_invert(surface->current.transform);
-	wlr_matrix_project_box(matrix, &box, transform, 0,
-		output->transform_matrix);
+	enum wl_output_transform transform = wlr_output_transform_invert(surface->current.transform);
+	transform = wlr_output_transform_compose(transform, output->transform);
 
-	wlr_render_texture_with_matrix(rdata->renderer, texture, matrix, 1);
+	wlr_render_pass_add_texture(rdata->render_pass, &(struct wlr_render_texture_options){
+		.texture = texture,
+		.dst_box = box,
+		.transform = transform,
+	});
 
 	wlr_surface_send_frame_done(surface, rdata->when);
 }
@@ -82,33 +83,37 @@ static void render_surface(struct wlr_surface *surface,
 static void output_handle_frame(struct wl_listener *listener, void *data) {
 	struct fullscreen_output *output =
 		wl_container_of(listener, output, frame);
-	struct wlr_renderer *renderer = output->server->renderer;
 
 	struct timespec now;
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	int width, height;
 	wlr_output_effective_resolution(output->wlr_output, &width, &height);
 
-	if (!wlr_output_attach_render(output->wlr_output, NULL)) {
+	struct wlr_output_state state;
+	wlr_output_state_init(&state);
+	struct wlr_render_pass *pass = wlr_output_begin_render_pass(output->wlr_output, &state, NULL,
+		NULL);
+	if (pass == NULL) {
 		return;
 	}
 
-	wlr_renderer_begin(renderer, width, height);
-
-	float color[4] = {0.3, 0.3, 0.3, 1.0};
-	wlr_renderer_clear(renderer, color);
+	wlr_render_pass_add_rect(pass, &(struct wlr_render_rect_options){
+		.color = { 0.3, 0.3, 0.3, 1.0 },
+		.box = { .width = width, .height = height },
+	});
 
 	if (output->surface != NULL) {
 		struct render_data rdata = {
 			.output = output->wlr_output,
-			.renderer = renderer,
+			.render_pass = pass,
 			.when = &now,
 		};
 		wlr_surface_for_each_surface(output->surface, render_surface, &rdata);
 	}
 
-	wlr_renderer_end(renderer);
-	wlr_output_commit(output->wlr_output);
+	wlr_render_pass_submit(pass);
+	wlr_output_commit_state(output->wlr_output, &state);
+	wlr_output_state_finish(&state);
 }
 
 static void output_set_surface(struct fullscreen_output *output,
@@ -149,8 +154,7 @@ static void server_handle_new_output(struct wl_listener *listener, void *data) {
 
 	wlr_output_init_render(wlr_output, server->allocator, server->renderer);
 
-	struct fullscreen_output *output =
-		calloc(1, sizeof(struct fullscreen_output));
+	struct fullscreen_output *output = calloc(1, sizeof(*output));
 	output->wlr_output = wlr_output;
 	output->server = server;
 	output->frame.notify = output_handle_frame;
@@ -160,12 +164,15 @@ static void server_handle_new_output(struct wl_listener *listener, void *data) {
 	wlr_output_layout_add_auto(server->output_layout, wlr_output);
 	wlr_output_create_global(wlr_output);
 
+	struct wlr_output_state state;
+	wlr_output_state_init(&state);
+	wlr_output_state_set_enabled(&state, true);
 	struct wlr_output_mode *mode = wlr_output_preferred_mode(wlr_output);
 	if (mode != NULL) {
-		wlr_output_set_mode(wlr_output, mode);
+		wlr_output_state_set_mode(&state, mode);
 	}
-
-	wlr_output_commit(wlr_output);
+	wlr_output_commit_state(wlr_output, &state);
+	wlr_output_state_finish(&state);
 }
 
 static void server_handle_present_surface(struct wl_listener *listener,
@@ -205,13 +212,13 @@ int main(int argc, char *argv[]) {
 
 	struct fullscreen_server server = {0};
 	server.wl_display = wl_display_create();
-	server.backend = wlr_backend_autocreate(server.wl_display);
+	server.backend = wlr_backend_autocreate(server.wl_display, NULL);
 	server.renderer = wlr_renderer_autocreate(server.backend);
 	wlr_renderer_init_wl_display(server.renderer, server.wl_display);
 	server.allocator = wlr_allocator_autocreate(server.backend,
 		server.renderer);
 
-	wlr_compositor_create(server.wl_display, server.renderer);
+	wlr_compositor_create(server.wl_display, 5, server.renderer);
 
 	server.output_layout = wlr_output_layout_create();
 

@@ -110,13 +110,13 @@ struct wlr_seat_keyboard_grab;
 
 struct wlr_keyboard_grab_interface {
 	void (*enter)(struct wlr_seat_keyboard_grab *grab,
-			struct wlr_surface *surface, uint32_t keycodes[],
-			size_t num_keycodes, struct wlr_keyboard_modifiers *modifiers);
+			struct wlr_surface *surface, const uint32_t keycodes[],
+			size_t num_keycodes, const struct wlr_keyboard_modifiers *modifiers);
 	void (*clear_focus)(struct wlr_seat_keyboard_grab *grab);
 	void (*key)(struct wlr_seat_keyboard_grab *grab, uint32_t time_msec,
 			uint32_t key, uint32_t state);
 	void (*modifiers)(struct wlr_seat_keyboard_grab *grab,
-			struct wlr_keyboard_modifiers *modifiers);
+			const struct wlr_keyboard_modifiers *modifiers);
 	void (*cancel)(struct wlr_seat_keyboard_grab *grab);
 };
 
@@ -134,7 +134,7 @@ struct wlr_touch_grab_interface {
 	void (*frame)(struct wlr_seat_touch_grab *grab);
 	// Cancel grab
 	void (*cancel)(struct wlr_seat_touch_grab *grab);
-	// Send wl_touch::cancel
+	// Send wl_touch.cancel
 	void (*wl_cancel)(struct wlr_seat_touch_grab *grab,
 			struct wlr_surface *surface);
 };
@@ -196,7 +196,6 @@ struct wlr_seat_pointer_state {
 	} events;
 };
 
-// TODO: May be useful to be able to simulate keyboard input events
 struct wlr_seat_keyboard_state {
 	struct wlr_seat *seat;
 	struct wlr_keyboard *keyboard;
@@ -510,7 +509,7 @@ void wlr_seat_keyboard_send_key(struct wlr_seat *seat, uint32_t time_msec,
  * wlr_seat_keyboard_notify_modifiers() instead.
  */
 void wlr_seat_keyboard_send_modifiers(struct wlr_seat *seat,
-		struct wlr_keyboard_modifiers *modifiers);
+		const struct wlr_keyboard_modifiers *modifiers);
 
 /**
  * Send a keyboard enter event to the given surface and consider it to be the
@@ -519,8 +518,8 @@ void wlr_seat_keyboard_send_modifiers(struct wlr_seat *seat,
  * probably want wlr_seat_keyboard_notify_enter() instead.
  */
 void wlr_seat_keyboard_enter(struct wlr_seat *seat,
-		struct wlr_surface *surface, uint32_t keycodes[], size_t num_keycodes,
-		struct wlr_keyboard_modifiers *modifiers);
+		struct wlr_surface *surface, const uint32_t keycodes[], size_t num_keycodes,
+		const struct wlr_keyboard_modifiers *modifiers);
 
 /**
  * Clear the focused surface for the keyboard and leave all entered surfaces.
@@ -541,7 +540,7 @@ void wlr_seat_keyboard_notify_key(struct wlr_seat *seat, uint32_t time_msec,
  * any keyboard grabs.
  */
 void wlr_seat_keyboard_notify_modifiers(struct wlr_seat *seat,
-		struct wlr_keyboard_modifiers *modifiers);
+		const struct wlr_keyboard_modifiers *modifiers);
 
 /**
  * Notify the seat that the keyboard focus has changed and request it to be the
@@ -549,8 +548,8 @@ void wlr_seat_keyboard_notify_modifiers(struct wlr_seat *seat,
  * keyboard.
  */
 void wlr_seat_keyboard_notify_enter(struct wlr_seat *seat,
-		struct wlr_surface *surface, uint32_t keycodes[], size_t num_keycodes,
-		struct wlr_keyboard_modifiers *modifiers);
+		struct wlr_surface *surface, const uint32_t keycodes[], size_t num_keycodes,
+		const struct wlr_keyboard_modifiers *modifiers);
 
 /**
  * Notify the seat of a keyboard leave event to the currently-focused surface.
@@ -693,12 +692,6 @@ void wlr_seat_touch_end_grab(struct wlr_seat *wlr_seat);
  * Whether or not the seat has a touch grab other than the default grab.
  */
 bool wlr_seat_touch_has_grab(struct wlr_seat *seat);
-
-/**
- * Check whether this serial is valid to start a grab action such as an
- * interactive move or resize.
- */
-bool wlr_seat_validate_grab_serial(struct wlr_seat *seat, uint32_t serial);
 
 /**
  * Check whether this serial is valid to start a pointer grab action.

@@ -15,6 +15,7 @@
 #include <wlr/types/wlr_output.h>
 
 struct wlr_drm_backend;
+typedef struct _drmModeModeInfo drmModeModeInfo;
 
 struct wlr_drm_lease {
 	int fd;
@@ -74,9 +75,15 @@ void wlr_drm_lease_terminate(struct wlr_drm_lease *lease);
 /**
  * Add mode to the list of available modes.
  */
-typedef struct _drmModeModeInfo drmModeModeInfo;
 struct wlr_output_mode *wlr_drm_connector_add_mode(struct wlr_output *output,
 	const drmModeModeInfo *mode);
+
+/**
+ * Get the raw DRM mode information from a struct wlr_output_mode.
+ *
+ * The mode passed in must belong to a DRM output.
+ */
+const drmModeModeInfo *wlr_drm_mode_get_info(struct wlr_output_mode *mode);
 
 /**
  * Get the connector's panel orientation.

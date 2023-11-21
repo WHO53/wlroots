@@ -1,7 +1,7 @@
 project(
 	'wlroots',
 	'c',
-	version: '0.16.2',
+	version: '0.17.0',
 	license: 'MIT',
 	meson_version: '>=0.59.0',
 	default_options: [
@@ -15,7 +15,7 @@ project(
 # necessary for bugfix releases. Increasing soversion is required because
 # wlroots never guarantees ABI stability -- only API stability is guaranteed
 # between minor releases.
-soversion = 11
+soversion = 12
 
 little_endian = target_machine.endian() == 'little'
 big_endian = target_machine.endian() == 'big'
@@ -80,7 +80,7 @@ if cc.has_argument('-fmacro-prefix-map=/prefix/to/hide=')
 	)
 else
 	add_project_arguments(
-		'-DWLR_REL_SRC_DIR="@0@"'.format(relative_dir),
+		'-D_WLR_REL_SRC_DIR="@0@"'.format(relative_dir),
 		language: 'c',
 	)
 endif
@@ -93,21 +93,23 @@ features = {
 	'gles2-renderer': false,
 	'vulkan-renderer': false,
 	'gbm-allocator': false,
+	'session': false,
 }
 internal_features = {
 	'xcb-errors': false,
 	'egl': false,
 }
+internal_config = configuration_data()
 
 wayland_project_options = ['tests=false', 'documentation=false']
 wayland_server = dependency('wayland-server',
-	version: '>=1.21',
+	version: '>=1.22',
 	fallback: 'wayland',
 	default_options: wayland_project_options,
 )
 
 drm = dependency('libdrm',
-	version: '>=2.4.113',
+	version: '>=2.4.114',
 	fallback: 'libdrm',
 	default_options: [
 		'intel=disabled',
@@ -127,9 +129,21 @@ drm = dependency('libdrm',
 		'tests=false',
 	],
 )
-xkbcommon = dependency('xkbcommon')
-udev = dependency('libudev')
-pixman = dependency('pixman-1')
+xkbcommon = dependency(
+	'xkbcommon',
+	fallback: 'libxkbcommon',
+	default_options: [
+		'enable-tools=false',
+		'enable-x11=false',
+		'enable-docs=false',
+		'enable-xkbregistry=false',
+	],
+)
+pixman = dependency('pixman-1',
+	version: '>=0.42.0',
+	fallback: 'pixman',
+	default_options: ['werror=false'],
+)
 math = cc.find_library('m')
 rt = cc.find_library('rt')
 
@@ -138,7 +152,6 @@ wlr_deps = [
 	wayland_server,
 	drm,
 	xkbcommon,
-	udev,
 	pixman,
 	math,
 	rt,
@@ -155,15 +168,7 @@ subdir('xwayland')
 
 subdir('include')
 
-foreach name, have : internal_features
-	add_project_arguments(
-		'-DHAS_@0@=@1@'.format(name.underscorify().to_upper(), have.to_int()),
-		language: 'c',
-	)
-endforeach
-
 wlr_inc = include_directories('include')
-proto_inc = include_directories('protocol')
 
 symbols_file = 'wlroots.syms'
 symbols_flag = '-Wl,--version-script,@0@/@1@'.format(meson.current_source_dir(), symbols_file)
@@ -171,7 +176,7 @@ lib_wlr = library(
 	meson.project_name(), wlr_files,
 	soversion: soversion.to_string(),
 	dependencies: wlr_deps,
-	include_directories: [wlr_inc, proto_inc],
+	include_directories: [wlr_inc],
 	install: true,
 	link_args: symbols_flag,
 	link_depends: symbols_file,
@@ -199,10 +204,9 @@ if get_option('examples')
 endif
 
 pkgconfig = import('pkgconfig')
-pkgconfig.generate(lib_wlr,
-	version: meson.project_version(),
-	filebase: meson.project_name(),
-	name: meson.project_name(),
+pkgconfig.generate(
+	lib_wlr,
 	description: 'Wayland compositor library',
+	url: 'https://gitlab.freedesktop.org/wlroots/wlroots',
 	variables: wlr_vars,
 )

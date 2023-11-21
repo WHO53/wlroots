@@ -93,6 +93,20 @@ static void manager_handle_inhibit_shortcuts(struct wl_client *client,
 		wlr_keyboard_shortcuts_inhibit_manager_v1_from_resource(
 				manager_resource);
 
+	uint32_t version = wl_resource_get_version(manager_resource);
+	struct wl_resource *inhibitor_resource = wl_resource_create(client,
+		&zwp_keyboard_shortcuts_inhibitor_v1_interface, version, id);
+	if (inhibitor_resource == NULL) {
+		wl_client_post_no_memory(client);
+		return;
+	}
+	wl_resource_set_implementation(inhibitor_resource,
+		&keyboard_shortcuts_inhibitor_impl, NULL,
+		keyboard_shortcuts_inhibitor_v1_handle_resource_destroy);
+	if (seat_client == NULL) {
+		return;
+	}
+
 	struct wlr_seat *seat = seat_client->seat;
 	struct wlr_keyboard_shortcuts_inhibitor_v1 *existing_inhibitor;
 	wl_list_for_each(existing_inhibitor, &manager->inhibitors, link) {
@@ -108,19 +122,9 @@ static void manager_handle_inhibit_shortcuts(struct wl_client *client,
 		return;
 	}
 
-	struct wlr_keyboard_shortcuts_inhibitor_v1 *inhibitor =
-		calloc(1, sizeof(struct wlr_keyboard_shortcuts_inhibitor_v1));
+	struct wlr_keyboard_shortcuts_inhibitor_v1 *inhibitor = calloc(1, sizeof(*inhibitor));
 	if (!inhibitor) {
 		wl_client_post_no_memory(client);
-		return;
-	}
-
-	uint32_t version = wl_resource_get_version(manager_resource);
-	struct wl_resource *inhibitor_resource = wl_resource_create(client,
-		&zwp_keyboard_shortcuts_inhibitor_v1_interface, version, id);
-	if (!inhibitor_resource) {
-		wl_client_post_no_memory(client);
-		free(inhibitor);
 		return;
 	}
 
@@ -138,10 +142,7 @@ static void manager_handle_inhibit_shortcuts(struct wl_client *client,
 		keyboard_shortcuts_inhibitor_handle_seat_destroy;
 	wl_signal_add(&seat->events.destroy, &inhibitor->seat_destroy);
 
-	wl_resource_set_implementation(inhibitor_resource,
-		&keyboard_shortcuts_inhibitor_impl, inhibitor,
-		keyboard_shortcuts_inhibitor_v1_handle_resource_destroy);
-
+	wl_resource_set_user_data(inhibitor_resource, inhibitor);
 	wl_list_insert(&manager->inhibitors, &inhibitor->link);
 	wl_signal_emit_mutable(&manager->events.new_inhibitor, inhibitor);
 }
@@ -184,8 +185,7 @@ static void keyboard_shortcuts_inhibit_bind(struct wl_client *wl_client,
 
 struct wlr_keyboard_shortcuts_inhibit_manager_v1 *
 wlr_keyboard_shortcuts_inhibit_v1_create(struct wl_display *display) {
-	struct wlr_keyboard_shortcuts_inhibit_manager_v1 *manager =
-		calloc(1, sizeof(struct wlr_keyboard_shortcuts_inhibit_manager_v1));
+	struct wlr_keyboard_shortcuts_inhibit_manager_v1 *manager = calloc(1, sizeof(*manager));
 	if (!manager) {
 		return NULL;
 	}

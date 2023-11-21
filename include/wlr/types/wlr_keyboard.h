@@ -62,6 +62,7 @@ struct wlr_keyboard {
 	xkb_led_index_t led_indexes[WLR_LED_COUNT];
 	xkb_mod_index_t mod_indexes[WLR_MODIFIER_COUNT];
 
+	uint32_t leds;
 	uint32_t keycodes[WLR_KEYBOARD_KEYS_CAP];
 	size_t num_keycodes;
 	struct wlr_keyboard_modifiers modifiers;
@@ -115,12 +116,27 @@ bool wlr_keyboard_set_keymap(struct wlr_keyboard *kb,
 bool wlr_keyboard_keymaps_match(struct xkb_keymap *km1, struct xkb_keymap *km2);
 
 /**
- * Sets the keyboard repeat info. `rate` is in key repeats/second and delay is
- * in milliseconds.
+ * Set the keyboard repeat info.
+ *
+ * rate is in key repeats/second and delay is in milliseconds.
  */
-void wlr_keyboard_set_repeat_info(struct wlr_keyboard *kb, int32_t rate,
-	int32_t delay);
+void wlr_keyboard_set_repeat_info(struct wlr_keyboard *kb, int32_t rate_hz,
+	int32_t delay_ms);
+
+/**
+ * Update the LEDs on the device, if any.
+ *
+ * leds is a bitmask of enum wlr_keyboard_led.
+ *
+ * If the device doesn't have the provided LEDs, this function is a no-op.
+ */
 void wlr_keyboard_led_update(struct wlr_keyboard *keyboard, uint32_t leds);
+
+/**
+ * Get the set of currently depressed or latched modifiers.
+ *
+ * A bitmask of enum wlr_keyboard_modifier is returned.
+ */
 uint32_t wlr_keyboard_get_modifiers(struct wlr_keyboard *keyboard);
 
 #endif

@@ -13,15 +13,17 @@
 #include <wlr/interfaces/wlr_output.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_matrix.h>
+#include <wlr/types/wlr_output_layer.h>
 #include <wlr/util/log.h>
 
 #include "backend/wayland.h"
 #include "render/pixel_format.h"
-#include "render/swapchain.h"
 #include "render/wlr_renderer.h"
+#include "types/wlr_output.h"
 
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
 #include "presentation-time-client-protocol.h"
+#include "viewporter-client-protocol.h"
 #include "xdg-activation-v1-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
@@ -29,15 +31,32 @@
 static const uint32_t SUPPORTED_OUTPUT_STATE =
 	WLR_OUTPUT_STATE_BACKEND_OPTIONAL |
 	WLR_OUTPUT_STATE_BUFFER |
+	WLR_OUTPUT_STATE_ENABLED |
 	WLR_OUTPUT_STATE_MODE |
 	WLR_OUTPUT_STATE_ADAPTIVE_SYNC_ENABLED;
 
 static size_t last_output_num = 0;
 
+static const char *surface_tag = "wlr_wl_output";
+
 static struct wlr_wl_output *get_wl_output_from_output(
 		struct wlr_output *wlr_output) {
 	assert(wlr_output_is_wl(wlr_output));
-	return (struct wlr_wl_output *)wlr_output;
+	struct wlr_wl_output *output = wl_container_of(wlr_output, output, wlr_output);
+	return output;
+}
+
+struct wlr_wl_output *get_wl_output_from_surface(struct wlr_wl_backend *wl,
+		struct wl_surface *surface) {
+	if (wl_proxy_get_tag((struct wl_proxy *)surface) != &surface_tag) {
+		return NULL;
+	}
+	struct wlr_wl_output *output = wl_surface_get_user_data(surface);
+	assert(output != NULL);
+	if (output->backend != wl) {
+		return NULL;
+	}
+	return output;
 }
 
 static void surface_frame_callback(void *data, struct wl_callback *cb,
@@ -172,6 +191,7 @@ static struct wl_buffer *import_dmabuf(struct wlr_wl_backend *wl,
 
 	struct wl_buffer *wl_buffer = zwp_linux_buffer_params_v1_create_immed(
 		params, dmabuf->width, dmabuf->height, dmabuf->format, 0);
+	zwp_linux_buffer_params_v1_destroy(params);
 	// TODO: handle create() errors
 	return wl_buffer;
 }
@@ -210,7 +230,7 @@ static struct wlr_wl_buffer *create_wl_buffer(struct wlr_wl_backend *wl,
 		return NULL;
 	}
 
-	struct wlr_wl_buffer *buffer = calloc(1, sizeof(struct wlr_wl_buffer));
+	struct wlr_wl_buffer *buffer = calloc(1, sizeof(*buffer));
 	if (buffer == NULL) {
 		wl_buffer_destroy(wl_buffer);
 		return NULL;
@@ -262,17 +282,241 @@ static bool output_test(struct wlr_output *wlr_output,
 	assert(wlr_output->adaptive_sync_status == WLR_OUTPUT_ADAPTIVE_SYNC_ENABLED);
 	if (state->committed & WLR_OUTPUT_STATE_ADAPTIVE_SYNC_ENABLED) {
 		if (!state->adaptive_sync_enabled) {
+			wlr_log(WLR_DEBUG, "Disabling adaptive sync is not supported");
 			return false;
 		}
 	}
 
 	if (state->committed & WLR_OUTPUT_STATE_MODE) {
 		assert(state->mode_type == WLR_OUTPUT_STATE_MODE_CUSTOM);
+
+		if (state->custom_mode.refresh != 0) {
+			wlr_log(WLR_DEBUG, "Refresh rates are not supported");
+			return false;
+		}
 	}
 
 	if ((state->committed & WLR_OUTPUT_STATE_BUFFER) &&
 			!test_buffer(output->backend, state->buffer)) {
+		wlr_log(WLR_DEBUG, "Unsupported buffer format");
 		return false;
+	}
+
+	if (state->committed & WLR_OUTPUT_STATE_LAYERS) {
+		// If we can't use a sub-surface for a layer, then we can't use a
+		// sub-surface for any layer underneath
+		bool supported = output->backend->subcompositor != NULL;
+		for (ssize_t i = state->layers_len - 1; i >= 0; i--) {
+			struct wlr_output_layer_state *layer_state = &state->layers[i];
+			if (layer_state->buffer != NULL) {
+				int x = layer_state->dst_box.x;
+				int y = layer_state->dst_box.y;
+				int width = layer_state->dst_box.width;
+				int height = layer_state->dst_box.height;
+				bool needs_viewport = width != layer_state->buffer->width ||
+					height != layer_state->buffer->height;
+				if (!wlr_fbox_empty(&layer_state->src_box)) {
+					needs_viewport = needs_viewport ||
+						layer_state->src_box.x != 0 ||
+						layer_state->src_box.y != 0 ||
+						layer_state->src_box.width != width ||
+						layer_state->src_box.height != height;
+				}
+				if (x < 0 || y < 0 ||
+						x + width > wlr_output->width ||
+						y + height > wlr_output->height ||
+						(output->backend->viewporter == NULL && needs_viewport)) {
+					supported = false;
+				}
+				supported = supported &&
+					test_buffer(output->backend, layer_state->buffer);
+			}
+			layer_state->accepted = supported;
+		}
+	}
+
+	return true;
+}
+
+static void output_layer_handle_addon_destroy(struct wlr_addon *addon) {
+	struct wlr_wl_output_layer *layer = wl_container_of(addon, layer, addon);
+
+	wlr_addon_finish(&layer->addon);
+	if (layer->viewport != NULL) {
+		wp_viewport_destroy(layer->viewport);
+	}
+	wl_subsurface_destroy(layer->subsurface);
+	wl_surface_destroy(layer->surface);
+	free(layer);
+}
+
+static const struct wlr_addon_interface output_layer_addon_impl = {
+	.name = "wlr_wl_output_layer",
+	.destroy = output_layer_handle_addon_destroy,
+};
+
+static struct wlr_wl_output_layer *get_or_create_output_layer(
+		struct wlr_wl_output *output, struct wlr_output_layer *wlr_layer) {
+	assert(output->backend->subcompositor != NULL);
+
+	struct wlr_wl_output_layer *layer;
+	struct wlr_addon *addon = wlr_addon_find(&wlr_layer->addons, output,
+		&output_layer_addon_impl);
+	if (addon != NULL) {
+		layer = wl_container_of(addon, layer, addon);
+		return layer;
+	}
+
+	layer = calloc(1, sizeof(*layer));
+	if (layer == NULL) {
+		return NULL;
+	}
+
+	wlr_addon_init(&layer->addon, &wlr_layer->addons, output,
+		&output_layer_addon_impl);
+
+	layer->surface = wl_compositor_create_surface(output->backend->compositor);
+	layer->subsurface = wl_subcompositor_get_subsurface(
+		output->backend->subcompositor, layer->surface, output->surface);
+
+	// Set an empty input region so that input events are handled by the main
+	// surface
+	struct wl_region *region = wl_compositor_create_region(output->backend->compositor);
+	wl_surface_set_input_region(layer->surface, region);
+	wl_region_destroy(region);
+
+	if (output->backend->viewporter != NULL) {
+		layer->viewport = wp_viewporter_get_viewport(output->backend->viewporter, layer->surface);
+	}
+
+	return layer;
+}
+
+static bool has_layers_order_changed(struct wlr_wl_output *output,
+		struct wlr_output_layer_state *layers, size_t layers_len) {
+	// output_basic_check() ensures that layers_len equals the number of
+	// registered output layers
+	size_t i = 0;
+	struct wlr_output_layer *layer;
+	wl_list_for_each(layer, &output->wlr_output.layers, link) {
+		assert(i < layers_len);
+		const struct wlr_output_layer_state *layer_state = &layers[i];
+		if (layer_state->layer != layer) {
+			return true;
+		}
+		i++;
+	}
+	assert(i == layers_len);
+	return false;
+}
+
+static void output_layer_unmap(struct wlr_wl_output_layer *layer) {
+	if (!layer->mapped) {
+		return;
+	}
+
+	wl_surface_attach(layer->surface, NULL, 0, 0);
+	wl_surface_commit(layer->surface);
+	layer->mapped = false;
+}
+
+static void damage_surface(struct wl_surface *surface,
+		const pixman_region32_t *damage) {
+	if (damage == NULL) {
+		wl_surface_damage_buffer(surface,
+			0, 0, INT32_MAX, INT32_MAX);
+		return;
+	}
+
+	int rects_len;
+	const pixman_box32_t *rects = pixman_region32_rectangles(damage, &rects_len);
+	for (int i = 0; i < rects_len; i++) {
+		const pixman_box32_t *r = &rects[i];
+		wl_surface_damage_buffer(surface, r->x1, r->y1,
+			r->x2 - r->x1, r->y2 - r->y1);
+	}
+}
+
+static bool output_layer_commit(struct wlr_wl_output *output,
+		struct wlr_wl_output_layer *layer,
+		const struct wlr_output_layer_state *state) {
+	if (state->layer->dst_box.x != state->dst_box.x ||
+			state->layer->dst_box.y != state->dst_box.y) {
+		wl_subsurface_set_position(layer->subsurface, state->dst_box.x, state->dst_box.y);
+	}
+
+	if (state->buffer == NULL) {
+		output_layer_unmap(layer);
+		return true;
+	}
+
+	struct wlr_wl_buffer *buffer =
+		get_or_create_wl_buffer(output->backend, state->buffer);
+	if (buffer == NULL) {
+		return false;
+	}
+
+	if (layer->viewport != NULL &&
+			(state->layer->dst_box.width != state->dst_box.width ||
+			state->layer->dst_box.height != state->dst_box.height)) {
+		wp_viewport_set_destination(layer->viewport, state->dst_box.width, state->dst_box.height);
+	}
+	if (layer->viewport != NULL && !wlr_fbox_equal(&state->layer->src_box, &state->src_box)) {
+		struct wlr_fbox src_box = state->src_box;
+		if (wlr_fbox_empty(&src_box)) {
+			// -1 resets the box
+			src_box = (struct wlr_fbox){
+				.x = -1,
+				.y = -1,
+				.width = -1,
+				.height = -1,
+			};
+		}
+		wp_viewport_set_source(layer->viewport,
+			wl_fixed_from_double(src_box.x),
+			wl_fixed_from_double(src_box.y),
+			wl_fixed_from_double(src_box.width),
+			wl_fixed_from_double(src_box.height));
+	}
+
+	wl_surface_attach(layer->surface, buffer->wl_buffer, 0, 0);
+	damage_surface(layer->surface, state->damage);
+	wl_surface_commit(layer->surface);
+	layer->mapped = true;
+	return true;
+}
+
+static bool commit_layers(struct wlr_wl_output *output,
+		struct wlr_output_layer_state *layers, size_t layers_len) {
+	if (output->backend->subcompositor == NULL) {
+		return true;
+	}
+
+	bool reordered = has_layers_order_changed(output, layers, layers_len);
+
+	struct wlr_wl_output_layer *prev_layer = NULL;
+	for (size_t i = 0; i < layers_len; i++) {
+		struct wlr_wl_output_layer *layer =
+			get_or_create_output_layer(output, layers[i].layer);
+		if (layer == NULL) {
+			return false;
+		}
+
+		if (!layers[i].accepted) {
+			output_layer_unmap(layer);
+			continue;
+		}
+
+		if (prev_layer != NULL && reordered) {
+			wl_subsurface_place_above(layer->subsurface,
+				prev_layer->surface);
+		}
+
+		if (!output_layer_commit(output, layer, &layers[i])) {
+			return false;
+		}
+
+		prev_layer = layer;
 	}
 
 	return true;
@@ -287,23 +531,16 @@ static bool output_commit(struct wlr_output *wlr_output,
 		return false;
 	}
 
+	if ((state->committed & WLR_OUTPUT_STATE_ENABLED) && !state->enabled) {
+		wl_surface_attach(output->surface, NULL, 0, 0);
+		wl_surface_commit(output->surface);
+	}
+
 	if (state->committed & WLR_OUTPUT_STATE_BUFFER) {
-		struct wp_presentation_feedback *wp_feedback = NULL;
-		if (output->backend->presentation != NULL) {
-			wp_feedback = wp_presentation_feedback(output->backend->presentation,
-				output->surface);
-		}
-
-		pixman_region32_t *damage = NULL;
+		const pixman_region32_t *damage = NULL;
 		if (state->committed & WLR_OUTPUT_STATE_DAMAGE) {
-			damage = (pixman_region32_t *) &state->damage;
+			damage = &state->damage;
 		}
-
-		if (output->frame_callback != NULL) {
-			wl_callback_destroy(output->frame_callback);
-		}
-		output->frame_callback = wl_surface_frame(output->surface);
-		wl_callback_add_listener(output->frame_callback, &frame_listener, output);
 
 		struct wlr_buffer *wlr_buffer = state->buffer;
 		struct wlr_wl_buffer *buffer =
@@ -313,19 +550,25 @@ static bool output_commit(struct wlr_output *wlr_output,
 		}
 
 		wl_surface_attach(output->surface, buffer->wl_buffer, 0, 0);
+		damage_surface(output->surface, damage);
+	}
 
-		if (damage == NULL) {
-			wl_surface_damage_buffer(output->surface,
-				0, 0, INT32_MAX, INT32_MAX);
-		} else {
-			int rects_len;
-			pixman_box32_t *rects =
-				pixman_region32_rectangles(damage, &rects_len);
-			for (int i = 0; i < rects_len; i++) {
-				pixman_box32_t *r = &rects[i];
-				wl_surface_damage_buffer(output->surface, r->x1, r->y1,
-					r->x2 - r->x1, r->y2 - r->y1);
-			}
+	if ((state->committed & WLR_OUTPUT_STATE_LAYERS) &&
+			!commit_layers(output, state->layers, state->layers_len)) {
+		return false;
+	}
+
+	if (output_pending_enabled(wlr_output, state)) {
+		if (output->frame_callback != NULL) {
+			wl_callback_destroy(output->frame_callback);
+		}
+		output->frame_callback = wl_surface_frame(output->surface);
+		wl_callback_add_listener(output->frame_callback, &frame_listener, output);
+
+		struct wp_presentation_feedback *wp_feedback = NULL;
+		if (output->backend->presentation != NULL) {
+			wp_feedback = wp_presentation_feedback(output->backend->presentation,
+				output->surface);
 		}
 
 		wl_surface_commit(output->surface);
@@ -349,16 +592,11 @@ static bool output_commit(struct wlr_output *wlr_output,
 				.commit_seq = wlr_output->commit_seq + 1,
 				.presented = true,
 			};
-			wlr_output_send_present(wlr_output, &present_event);
+			output_defer_present(wlr_output, present_event);
 		}
 	}
 
 	wl_display_flush(output->backend->remote_display);
-
-	if (state->committed & WLR_OUTPUT_STATE_MODE) {
-		wlr_output_update_custom_mode(wlr_output,
-			state->custom_mode.width, state->custom_mode.height, 0);
-	}
 
 	return true;
 }
@@ -433,9 +671,15 @@ static void output_destroy(struct wlr_output *wlr_output) {
 	if (output->zxdg_toplevel_decoration_v1) {
 		zxdg_toplevel_decoration_v1_destroy(output->zxdg_toplevel_decoration_v1);
 	}
-	xdg_toplevel_destroy(output->xdg_toplevel);
-	xdg_surface_destroy(output->xdg_surface);
-	wl_surface_destroy(output->surface);
+	if (output->xdg_toplevel) {
+		xdg_toplevel_destroy(output->xdg_toplevel);
+	}
+	if (output->xdg_surface) {
+		xdg_surface_destroy(output->xdg_surface);
+	}
+	if (output->own_surface) {
+		wl_surface_destroy(output->surface);
+	}
 	wl_display_flush(output->backend->remote_display);
 	free(output);
 }
@@ -477,6 +721,7 @@ static void xdg_surface_handle_configure(void *data,
 	struct wlr_wl_output *output = data;
 	assert(output && output->xdg_surface == xdg_surface);
 
+	output->configured = true;
 	xdg_surface_ack_configure(xdg_surface, serial);
 
 	// nothing else?
@@ -496,8 +741,11 @@ static void xdg_toplevel_handle_configure(void *data,
 		return;
 	}
 
-	// TODO: loop over states for maximized etc?
-	wlr_output_update_custom_mode(&output->wlr_output, width, height, 0);
+	struct wlr_output_state state;
+	wlr_output_state_init(&state);
+	wlr_output_state_set_custom_mode(&state, width, height, 0);
+	wlr_output_send_request_state(&output->wlr_output, &state);
+	wlr_output_state_finish(&state);
 }
 
 static void xdg_toplevel_handle_close(void *data,
@@ -513,23 +761,22 @@ static const struct xdg_toplevel_listener xdg_toplevel_listener = {
 	.close = xdg_toplevel_handle_close,
 };
 
-struct wlr_output *wlr_wl_output_create(struct wlr_backend *wlr_backend) {
-	struct wlr_wl_backend *backend = get_wl_backend_from_backend(wlr_backend);
-	if (!backend->started) {
-		++backend->requested_outputs;
-		return NULL;
-	}
-
-	struct wlr_wl_output *output;
-	if (!(output = calloc(sizeof(struct wlr_wl_output), 1))) {
+static struct wlr_wl_output *output_create(struct wlr_wl_backend *backend,
+		struct wl_surface *surface) {
+	struct wlr_wl_output *output = calloc(1, sizeof(*output));
+	if (output == NULL) {
 		wlr_log(WLR_ERROR, "Failed to allocate wlr_wl_output");
 		return NULL;
 	}
-	wlr_output_init(&output->wlr_output, &backend->backend, &output_impl,
-		backend->local_display);
 	struct wlr_output *wlr_output = &output->wlr_output;
 
-	wlr_output_update_custom_mode(wlr_output, 1280, 720, 0);
+	struct wlr_output_state state;
+	wlr_output_state_init(&state);
+	wlr_output_state_set_custom_mode(&state, 1280, 720, 0);
+
+	wlr_output_init(wlr_output, &backend->backend, &output_impl,
+		backend->local_display, &state);
+	wlr_output_state_finish(&state);
 
 	wlr_output->adaptive_sync_status = WLR_OUTPUT_ADAPTIVE_SYNC_ENABLED;
 
@@ -543,21 +790,60 @@ struct wlr_output *wlr_wl_output_create(struct wlr_backend *wlr_backend) {
 	snprintf(description, sizeof(description), "Wayland output %zu", output_num);
 	wlr_output_set_description(wlr_output, description);
 
+	output->surface = surface;
 	output->backend = backend;
 	wl_list_init(&output->presentation_feedbacks);
 
-	output->surface = wl_compositor_create_surface(backend->compositor);
-	if (!output->surface) {
-		wlr_log_errno(WLR_ERROR, "Could not create output surface");
-		goto error;
-	}
+	wl_proxy_set_tag((struct wl_proxy *)output->surface, &surface_tag);
 	wl_surface_set_user_data(output->surface, output);
+
+	wl_list_insert(&backend->outputs, &output->link);
+
+	return output;
+}
+
+static void output_start(struct wlr_wl_output *output) {
+	struct wlr_output *wlr_output = &output->wlr_output;
+	struct wlr_wl_backend *backend = output->backend;
+
+	wl_signal_emit_mutable(&backend->backend.events.new_output, wlr_output);
+
+	struct wlr_wl_seat *seat;
+	wl_list_for_each(seat, &backend->seats, link) {
+		if (seat->wl_pointer) {
+			create_pointer(seat, output);
+		}
+	}
+}
+
+struct wlr_output *wlr_wl_output_create(struct wlr_backend *wlr_backend) {
+	struct wlr_wl_backend *backend = get_wl_backend_from_backend(wlr_backend);
+	if (!backend->started) {
+		++backend->requested_outputs;
+		return NULL;
+	}
+
+	struct wl_surface *surface = wl_compositor_create_surface(backend->compositor);
+	if (surface == NULL) {
+		wlr_log(WLR_ERROR, "Could not create output surface");
+		return NULL;
+	}
+
+	struct wlr_wl_output *output = output_create(backend, surface);
+	if (output == NULL) {
+		wl_surface_destroy(surface);
+		return NULL;
+	}
+
+	output->own_surface = true;
+
 	output->xdg_surface =
 		xdg_wm_base_get_xdg_surface(backend->xdg_wm_base, output->surface);
 	if (!output->xdg_surface) {
 		wlr_log_errno(WLR_ERROR, "Could not get xdg surface");
 		goto error;
 	}
+
 	output->xdg_toplevel =
 		xdg_surface_get_toplevel(output->xdg_surface);
 	if (!output->xdg_toplevel) {
@@ -577,7 +863,7 @@ struct wlr_output *wlr_wl_output_create(struct wlr_backend *wlr_backend) {
 			ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
 	}
 
-	wlr_wl_output_set_title(wlr_output, NULL);
+	wlr_wl_output_set_title(&output->wlr_output, NULL);
 
 	xdg_toplevel_set_app_id(output->xdg_toplevel, "wlroots");
 	xdg_surface_add_listener(output->xdg_surface,
@@ -586,19 +872,16 @@ struct wlr_output *wlr_wl_output_create(struct wlr_backend *wlr_backend) {
 			&xdg_toplevel_listener, output);
 	wl_surface_commit(output->surface);
 
-	wl_display_roundtrip(output->backend->remote_display);
-
-	wl_list_insert(&backend->outputs, &output->link);
-	wlr_output_update_enabled(wlr_output, true);
-
-	wl_signal_emit_mutable(&backend->backend.events.new_output, wlr_output);
-
-	struct wlr_wl_seat *seat;
-	wl_list_for_each(seat, &backend->seats, link) {
-		if (seat->wl_pointer) {
-			create_pointer(seat, output);
+	struct wl_event_loop *event_loop = wl_display_get_event_loop(backend->local_display);
+	while (!output->configured) {
+		int ret = wl_event_loop_dispatch(event_loop, -1);
+		if (ret < 0) {
+			wlr_log(WLR_ERROR, "wl_event_loop_dispatch() failed");
+			goto error;
 		}
 	}
+
+	output_start(output);
 
 	// TODO: let the compositor do this bit
 	if (backend->activation_v1 && backend->activation_token) {
@@ -606,18 +889,32 @@ struct wlr_output *wlr_wl_output_create(struct wlr_backend *wlr_backend) {
 				backend->activation_token, output->surface);
 	}
 
-	// Start the rendering loop by requesting the compositor to render a frame
-	wlr_output_schedule_frame(wlr_output);
-
-	return wlr_output;
+	return &output->wlr_output;
 
 error:
 	wlr_output_destroy(&output->wlr_output);
 	return NULL;
 }
 
+struct wlr_output *wlr_wl_output_create_from_surface(struct wlr_backend *wlr_backend,
+		struct wl_surface *surface) {
+	struct wlr_wl_backend *backend = get_wl_backend_from_backend(wlr_backend);
+	assert(backend->started);
+
+	struct wlr_wl_output *output = output_create(backend, surface);
+	if (output == NULL) {
+		wl_surface_destroy(surface);
+		return NULL;
+	}
+
+	output_start(output);
+
+	return &output->wlr_output;
+}
+
 void wlr_wl_output_set_title(struct wlr_output *output, const char *title) {
 	struct wlr_wl_output *wl_output = get_wl_output_from_output(output);
+	assert(wl_output->xdg_toplevel != NULL);
 
 	char wl_title[32];
 	if (title == NULL) {

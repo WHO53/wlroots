@@ -8,11 +8,18 @@ endif
 wlr_files += files(
 	'dmabuf.c',
 	'drm_format_set.c',
+	'pass.c',
 	'pixel_format.c',
 	'swapchain.c',
 	'wlr_renderer.c',
 	'wlr_texture.c',
 )
+
+if cc.has_header('linux/dma-buf.h') and target_machine.system() == 'linux'
+	wlr_files += files('dmabuf_linux.c')
+else
+	wlr_files += files('dmabuf_fallback.c')
+endif
 
 if 'gles2' in renderers or 'auto' in renderers
 	egl = dependency('egl', required: 'gles2' in renderers)

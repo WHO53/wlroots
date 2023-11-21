@@ -7,6 +7,7 @@ packages:
   - devel/pkgconf
   - graphics/glslang
   - graphics/libdrm
+  - graphics/libliftoff
   - graphics/mesa-libs
   - graphics/png
   - graphics/vulkan-headers
@@ -22,7 +23,8 @@ packages:
   - x11/xcb-util-errors
   - x11/xcb-util-renderutil
   - x11/xcb-util-wm
-  - x11-servers/xwayland
+  - x11-servers/xwayland-devel
+  - sysutils/libdisplay-info
   - sysutils/seatd
   - gmake
   - hwdata
@@ -31,7 +33,7 @@ sources:
 tasks:
   - wlroots: |
       cd wlroots
-      meson build --fatal-meson-warnings -Dauto_features=enabled
+      meson setup build --fatal-meson-warnings -Dauto_features=enabled
       ninja -C build
       sudo ninja -C build install
   - tinywl: |

@@ -4,7 +4,6 @@
 
 int vulkan_find_mem_type(struct wlr_vk_device *dev,
 		VkMemoryPropertyFlags flags, uint32_t req_bits) {
-
 	VkPhysicalDeviceMemoryProperties props;
 	vkGetPhysicalDeviceMemoryProperties(dev->phdev, &props);
 
@@ -59,39 +58,21 @@ const char *vulkan_strerror(VkResult err) {
 #undef ERR_STR
 }
 
-void vulkan_change_layout_queue(VkCommandBuffer cb, VkImage img,
-		VkImageLayout ol, VkPipelineStageFlags srcs, VkAccessFlags srca,
-		VkImageLayout nl, VkPipelineStageFlags dsts, VkAccessFlags dsta,
-		uint32_t src_family, uint32_t dst_family) {
-	VkImageMemoryBarrier barrier = {0};
-	barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	barrier.oldLayout = ol;
-	barrier.newLayout = nl;
-	barrier.image = img;
-	barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	barrier.subresourceRange.layerCount = 1;
-	barrier.subresourceRange.levelCount = 1;
-	barrier.srcAccessMask = srca;
-	barrier.dstAccessMask = dsta;
-	barrier.srcQueueFamilyIndex = src_family;
-	barrier.dstQueueFamilyIndex = dst_family;
-
-	vkCmdPipelineBarrier(cb, srcs, dsts, 0, 0, NULL, 0, NULL, 1, &barrier);
-}
-
 void vulkan_change_layout(VkCommandBuffer cb, VkImage img,
 		VkImageLayout ol, VkPipelineStageFlags srcs, VkAccessFlags srca,
 		VkImageLayout nl, VkPipelineStageFlags dsts, VkAccessFlags dsta) {
-	vulkan_change_layout_queue(cb, img, ol, srcs, srca, nl, dsts, dsta,
-		VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED);
-}
-
-bool vulkan_has_extension(size_t count, const char **exts, const char *find) {
-	for (unsigned i = 0; i < count; ++i) {
-		if (strcmp(exts[i], find) == 0u) {
-			return true;
-		}
-	}
-
-	return false;
+	VkImageMemoryBarrier barrier = {
+		.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+		.oldLayout = ol,
+		.newLayout = nl,
+		.image = img,
+		.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+		.subresourceRange.layerCount = 1,
+		.subresourceRange.levelCount = 1,
+		.srcAccessMask = srca,
+		.dstAccessMask = dsta,
+		.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+	};
+	vkCmdPipelineBarrier(cb, srcs, dsts, 0, 0, NULL, 0, NULL, 1, &barrier);
 }

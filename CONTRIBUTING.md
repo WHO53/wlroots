@@ -1,11 +1,19 @@
 # Contributing to wlroots
 
 Contributing just involves sending a merge request. You will probably be more
-successful with your contribution if you visit [#sway-devel on Libera Chat]
+successful with your contribution if you visit [#wlroots on Libera Chat]
 upfront and discuss your plans.
 
 Note: rules are made to be broken. Adjust or ignore any/all of these as you see
 fit, but be prepared to justify it to your peers.
+
+## Forking
+
+New GitLab accounts may not have the permission to fork repositories. You will
+need to [file a user verification request] to get this permission. See the
+[freedesktop wiki] for more details.
+
+The fork must be marked as public to allow CI to run.
 
 ## Merge Requests
 
@@ -13,7 +21,7 @@ If you already have your own merge request habits, feel free to use them. If you
 don't, however, allow me to make a suggestion: feature branches pulled from
 upstream. Try this:
 
-1. Fork wlroots (make the fork public to allow the CI to run)
+1. Fork wlroots
 2. `git clone git@gitlab.freedesktop.org:<username>/wlroots.git && cd wlroots`
 3. `git remote add upstream https://gitlab.freedesktop.org/wlroots/wlroots.git`
 
@@ -169,7 +177,7 @@ Try to break the line in the place which you think is the most appropriate.
 
 ### Line Length
 
-Try to keep your lines under 80 columns, but you can go up to 100 if it
+Try to keep your lines under 100 columns, but you can break this rule if it
 improves readability. Don't break lines indiscriminately, try to find nice
 breaking points so your code is easy to read.
 
@@ -189,8 +197,8 @@ Functions that are responsible for constructing objects should take one of the
 two following forms:
 
 * `init`: for functions which accept a pointer to a pre-allocated object (e.g.
-a member of a struct) and initialize it. Such functions must call `memset()`
-to zero out the memory before initializing it to avoid leaving unset fields.
+a member of a struct) and initialize it. Such functions must zero out the
+memory before initializing it to avoid leaving unset fields.
 * `create`: for functions which allocate the memory for an object, initialize
 it, and return a pointer. Such functions should allocate the memory with
 `calloc()` to avoid leaving unset fields.
@@ -228,6 +236,15 @@ used and `#undef` them after.
   comment.
 * Document the contents and container of a `struct wl_list` with a
   `// content.link` and `// container.list` comment.
+
+### Safety
+
+* Avoid string manipulation functions which don't take the size of the
+  destination buffer as input: for instance, prefer `snprintf` over `sprintf`.
+* Avoid repeating type names in `sizeof()` where possible. For instance, prefer
+  `ptr = calloc(1, sizeof(*ptr))` over `ptr = calloc(1, sizeof(struct foo))`.
+* Prefer `*ptr = (struct foo){0}` over `memset(ptr, 0, sizeof(*ptr))`.
+* Prefer `*foo = *bar` over `memcpy(foo, bar, sizeof(*foo))`.
 
 ### Example
 
@@ -421,7 +438,9 @@ static void subsurface_handle_surface_destroy(struct wl_listener *listener,
 }
 ```
 
-[#sway-devel on Libera Chat]: https://web.libera.chat/gamja/?channels=#sway-devel
+[#wlroots on Libera Chat]: https://web.libera.chat/gamja/?channels=#wlroots
+[file a user verification request]: https://gitlab.freedesktop.org/freedesktop/freedesktop/-/issues/new?issuable_template=User%20verification
+[freedesktop wiki]: https://gitlab.freedesktop.org/freedesktop/freedesktop/-/wikis/home
 [linear, "recipe" style]: https://www.bitsnbites.eu/git-history-work-log-vs-recipe/
 [git-rebase.io]: https://git-rebase.io/
 [reference issues]: https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically

@@ -22,6 +22,27 @@ static const struct ext_session_lock_manager_v1_interface lock_manager_implement
 static const struct ext_session_lock_v1_interface lock_implementation;
 static const struct ext_session_lock_surface_v1_interface lock_surface_implementation;
 
+static void lock_surface_destroy(struct wlr_session_lock_surface_v1 *lock_surface) {
+	wlr_surface_unmap(lock_surface->surface);
+
+	wl_signal_emit_mutable(&lock_surface->events.destroy, NULL);
+
+	wl_list_remove(&lock_surface->link);
+
+	struct wlr_session_lock_surface_v1_configure *configure, *tmp;
+	wl_list_for_each_safe(configure, tmp, &lock_surface->configure_list, link) {
+		wl_list_remove(&configure->link);
+		free(configure);
+	}
+
+	assert(wl_list_empty(&lock_surface->events.destroy.listener_list));
+
+	wl_list_remove(&lock_surface->output_destroy.link);
+
+	wl_resource_set_user_data(lock_surface->resource, NULL);
+	free(lock_surface);
+}
+
 static struct wlr_session_lock_manager_v1 *lock_manager_from_resource(
 		struct wl_resource *resource) {
 	assert(wl_resource_instance_of(resource,
@@ -48,21 +69,18 @@ static struct wlr_session_lock_surface_v1 *lock_surface_from_resource(
 
 static const struct wlr_surface_role lock_surface_role;
 
-bool wlr_surface_is_session_lock_surface_v1(struct wlr_surface *surface) {
-	return surface->role == &lock_surface_role;
-}
-
-struct wlr_session_lock_surface_v1 *wlr_session_lock_surface_v1_from_wlr_surface(
+struct wlr_session_lock_surface_v1 *wlr_session_lock_surface_v1_try_from_wlr_surface(
 		struct wlr_surface *surface) {
-	assert(wlr_surface_is_session_lock_surface_v1(surface));
-	return (struct wlr_session_lock_surface_v1 *)surface->role_data;
+	if (surface->role != &lock_surface_role || surface->role_resource == NULL) {
+		return NULL;
+	}
+	return lock_surface_from_resource(surface->role_resource);
 }
 
 uint32_t wlr_session_lock_surface_v1_configure(
 		struct wlr_session_lock_surface_v1 *lock_surface,
 		uint32_t width, uint32_t height) {
-	struct wlr_session_lock_surface_v1_configure *configure =
-		calloc(1, sizeof(struct wlr_session_lock_surface_v1_configure));
+	struct wlr_session_lock_surface_v1_configure *configure = calloc(1, sizeof(*configure));
 	if (configure == NULL) {
 		wl_resource_post_no_memory(lock_surface->resource);
 		return lock_surface->pending.configure_serial;
@@ -126,7 +144,6 @@ static void lock_surface_handle_ack_configure(struct wl_client *client,
 	free(configure);
 }
 
-
 static const struct ext_session_lock_surface_v1_interface lock_surface_implementation = {
 	.destroy = resource_handle_destroy,
 	.ack_configure = lock_surface_handle_ack_configure,
@@ -134,7 +151,17 @@ static const struct ext_session_lock_surface_v1_interface lock_surface_implement
 
 static void lock_surface_role_commit(struct wlr_surface *surface) {
 	struct wlr_session_lock_surface_v1 *lock_surface =
-		wlr_session_lock_surface_v1_from_wlr_surface(surface);
+		wlr_session_lock_surface_v1_try_from_wlr_surface(surface);
+	if (lock_surface == NULL) {
+		return;
+	}
+
+	if (!wlr_surface_has_buffer(surface)) {
+		wl_resource_post_error(lock_surface->resource,
+			EXT_SESSION_LOCK_SURFACE_V1_ERROR_NULL_BUFFER,
+			"session lock surface is committed with a null buffer");
+		return;
+	}
 
 	if (!lock_surface->configured) {
 		wl_resource_post_error(lock_surface->resource,
@@ -154,52 +181,21 @@ static void lock_surface_role_commit(struct wlr_surface *surface) {
 
 	lock_surface->current = lock_surface->pending;
 
-	if (!lock_surface->mapped) {
-		lock_surface->mapped = true;
-		wl_signal_emit_mutable(&lock_surface->events.map, NULL);
-	}
-}
-
-static void lock_surface_role_precommit(struct wlr_surface *surface,
-		const struct wlr_surface_state *state) {
-	struct wlr_session_lock_surface_v1 *lock_surface =
-		wlr_session_lock_surface_v1_from_wlr_surface(surface);
-
-	if (state->committed & WLR_SURFACE_STATE_BUFFER && state->buffer == NULL) {
-		wl_resource_post_error(lock_surface->resource,
-			EXT_SESSION_LOCK_SURFACE_V1_ERROR_NULL_BUFFER,
-			"session lock surfaces committed with null buffer");
-		return;
-	}
+	wlr_surface_map(surface);
 }
 
 static void lock_surface_role_destroy(struct wlr_surface *surface) {
 	struct wlr_session_lock_surface_v1 *lock_surface =
-		wlr_session_lock_surface_v1_from_wlr_surface(surface);
-
-	wl_signal_emit_mutable(&lock_surface->events.destroy, NULL);
-
-	wl_list_remove(&lock_surface->link);
-
-	struct wlr_session_lock_surface_v1_configure *configure, *tmp;
-	wl_list_for_each_safe(configure, tmp, &lock_surface->configure_list, link) {
-		wl_list_remove(&configure->link);
-		free(configure);
+		wlr_session_lock_surface_v1_try_from_wlr_surface(surface);
+	if (lock_surface == NULL) {
+		return;
 	}
-
-	assert(wl_list_empty(&lock_surface->events.map.listener_list));
-	assert(wl_list_empty(&lock_surface->events.destroy.listener_list));
-
-	wl_list_remove(&lock_surface->output_destroy.link);
-
-	wl_resource_set_user_data(lock_surface->resource, NULL);
-	free(lock_surface);
+	lock_surface_destroy(lock_surface);
 }
 
 static const struct wlr_surface_role lock_surface_role = {
 	.name = "ext_session_lock_surface_v1",
 	.commit = lock_surface_role_commit,
-	.precommit = lock_surface_role_precommit,
 	.destroy = lock_surface_role_destroy,
 };
 
@@ -207,15 +203,7 @@ static void lock_surface_handle_output_destroy(struct wl_listener *listener,
 		void *data) {
 	struct wlr_session_lock_surface_v1 *lock_surface =
 		wl_container_of(listener, lock_surface, output_destroy);
-	wlr_surface_destroy_role_object(lock_surface->surface);
-}
-
-static void lock_surface_resource_destroy(struct wl_resource *resource) {
-	struct wlr_session_lock_surface_v1 *lock_surface =
-		lock_surface_from_resource(resource);
-	if (lock_surface != NULL) {
-		wlr_surface_destroy_role_object(lock_surface->surface);
-	}
+	lock_surface_destroy(lock_surface);
 }
 
 static void lock_handle_get_lock_surface(struct wl_client *client,
@@ -238,8 +226,7 @@ static void lock_handle_get_lock_surface(struct wl_client *client,
 	// Leave the lock surface resource inert for now, we will set the
 	// user data at the end of this function if everything is successful.
 	wl_resource_set_implementation(lock_surface_resource,
-		&lock_surface_implementation, NULL,
-		lock_surface_resource_destroy);
+		&lock_surface_implementation, NULL, NULL);
 
 	struct wlr_session_lock_v1 *lock = lock_from_resource(lock_resource);
 	if (lock == NULL) {
@@ -270,14 +257,13 @@ static void lock_handle_get_lock_surface(struct wl_client *client,
 		return;
 	}
 
-	struct wlr_session_lock_surface_v1 *lock_surface =
-		calloc(1, sizeof(struct wlr_session_lock_surface_v1));
+	struct wlr_session_lock_surface_v1 *lock_surface = calloc(1, sizeof(*lock_surface));
 	if (lock_surface == NULL) {
 		wl_client_post_no_memory(client);
 		return;
 	}
 
-	if (!wlr_surface_set_role(surface, &lock_surface_role, lock_surface,
+	if (!wlr_surface_set_role(surface, &lock_surface_role,
 			lock_resource, EXT_SESSION_LOCK_V1_ERROR_ROLE)) {
 		free(lock_surface);
 		return;
@@ -286,6 +272,8 @@ static void lock_handle_get_lock_surface(struct wl_client *client,
 	lock_surface->resource = lock_surface_resource;
 	wl_resource_set_user_data(lock_surface_resource, lock_surface);
 
+	wlr_surface_set_role_object(surface, lock_surface_resource);
+
 	wl_list_insert(&lock->surfaces, &lock_surface->link);
 
 	lock_surface->output = output;
@@ -293,7 +281,6 @@ static void lock_handle_get_lock_surface(struct wl_client *client,
 
 	wl_list_init(&lock_surface->configure_list);
 
-	wl_signal_init(&lock_surface->events.map);
 	wl_signal_init(&lock_surface->events.destroy);
 
 	wl_signal_add(&output->events.destroy, &lock_surface->output_destroy);
@@ -306,6 +293,17 @@ static void lock_handle_unlock_and_destroy(struct wl_client *client,
 		struct wl_resource *lock_resource) {
 	struct wlr_session_lock_v1 *lock = lock_from_resource(lock_resource);
 	if (lock == NULL) {
+		// This can happen if the compositor sent the locked event and
+		// later the finished event as the lock is destroyed when the
+		// finished event is sent.
+		wl_resource_destroy(lock_resource);
+		return;
+	}
+
+	if (!lock->locked_sent) {
+		wl_resource_post_error(lock_resource,
+			EXT_SESSION_LOCK_V1_ERROR_INVALID_UNLOCK,
+			"the locked event was never sent");
 		return;
 	}
 
@@ -314,20 +312,42 @@ static void lock_handle_unlock_and_destroy(struct wl_client *client,
 	wl_resource_destroy(lock_resource);
 }
 
+static void lock_handle_destroy(struct wl_client *client,
+		struct wl_resource *lock_resource) {
+	struct wlr_session_lock_v1 *lock = lock_from_resource(lock_resource);
+	if (lock == NULL) {
+		// The compositor sent the finished event and destroyed the lock.
+		wl_resource_destroy(lock_resource);
+		return;
+	}
+
+	if (lock->locked_sent) {
+		wl_resource_post_error(lock_resource,
+			EXT_SESSION_LOCK_V1_ERROR_INVALID_DESTROY,
+			"the session lock may not be destroyed while locked");
+	} else {
+		wl_resource_post_error(lock_resource,
+			EXT_SESSION_LOCK_V1_ERROR_INVALID_DESTROY,
+			"the finished event was never sent");
+	}
+}
+
 static const struct ext_session_lock_v1_interface lock_implementation = {
-	.destroy = resource_handle_destroy,
+	.destroy = lock_handle_destroy,
 	.get_lock_surface = lock_handle_get_lock_surface,
 	.unlock_and_destroy = lock_handle_unlock_and_destroy,
 };
 
 void wlr_session_lock_v1_send_locked(struct wlr_session_lock_v1 *lock) {
+	assert(!lock->locked_sent);
+	lock->locked_sent = true;
 	ext_session_lock_v1_send_locked(lock->resource);
 }
 
 static void lock_destroy(struct wlr_session_lock_v1 *lock) {
 	struct wlr_session_lock_surface_v1 *lock_surface, *tmp;
 	wl_list_for_each_safe(lock_surface, tmp, &lock->surfaces, link) {
-		wlr_surface_destroy_role_object(lock_surface->surface);
+		lock_surface_destroy(lock_surface);
 	}
 	assert(wl_list_empty(&lock->surfaces));
 
@@ -358,8 +378,7 @@ static void lock_manager_handle_lock(struct wl_client *client,
 	struct wlr_session_lock_manager_v1 *lock_manager =
 		lock_manager_from_resource(manager_resource);
 
-	struct wlr_session_lock_v1 *lock =
-		calloc(1, sizeof(struct wlr_session_lock_v1));
+	struct wlr_session_lock_v1 *lock = calloc(1, sizeof(*lock));
 	if (lock == NULL) {
 		wl_client_post_no_memory(client);
 		return;
@@ -419,8 +438,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 }
 
 struct wlr_session_lock_manager_v1 *wlr_session_lock_manager_v1_create(struct wl_display *display) {
-	struct wlr_session_lock_manager_v1 *lock_manager =
-		calloc(1, sizeof(struct wlr_session_lock_manager_v1));
+	struct wlr_session_lock_manager_v1 *lock_manager = calloc(1, sizeof(*lock_manager));
 	if (lock_manager == NULL) {
 		return NULL;
 	}

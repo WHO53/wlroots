@@ -62,7 +62,7 @@ static void output_power_handle_output_commit(struct wl_listener *listener,
 	struct wlr_output_power_v1 *output_power =
 		wl_container_of(listener, output_power, output_commit_listener);
 	struct wlr_output_event_commit *event = data;
-	if (event->committed & WLR_OUTPUT_STATE_ENABLED) {
+	if (event->state->committed & WLR_OUTPUT_STATE_ENABLED) {
 		output_power_v1_send_mode(output_power);
 	}
 }
@@ -117,8 +117,7 @@ static void output_power_manager_get_output_power(struct wl_client *client,
 		output_power_manager_from_resource(manager_resource);
 	struct wlr_output *output = wlr_output_from_resource(output_resource);
 
-	struct wlr_output_power_v1 *output_power =
-		calloc(1, sizeof(struct wlr_output_power_v1));
+	struct wlr_output_power_v1 *output_power = calloc(1, sizeof(*output_power));
 	if (output_power == NULL) {
 		wl_client_post_no_memory(client);
 		return;
@@ -202,8 +201,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 
 struct wlr_output_power_manager_v1 *wlr_output_power_manager_v1_create(
 		struct wl_display *display) {
-	struct wlr_output_power_manager_v1 *manager =
-		calloc(1, sizeof(struct wlr_output_power_manager_v1));
+	struct wlr_output_power_manager_v1 *manager = calloc(1, sizeof(*manager));
 	if (!manager) {
 		return NULL;
 	}

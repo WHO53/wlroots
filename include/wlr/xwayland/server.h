@@ -27,6 +27,7 @@ struct wlr_xwayland_server {
 	struct wl_client *client;
 	struct wl_event_source *pipe_source;
 	int wm_fd[2], wl_fd[2];
+	bool ready;
 
 	time_t server_start;
 
@@ -39,8 +40,10 @@ struct wlr_xwayland_server {
 	struct wlr_xwayland_server_options options;
 
 	struct wl_display *wl_display;
+	struct wl_event_source *idle_source;
 
 	struct {
+		struct wl_signal start;
 		struct wl_signal ready;
 		struct wl_signal destroy;
 	} events;

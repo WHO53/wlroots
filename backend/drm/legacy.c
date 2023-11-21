@@ -38,7 +38,7 @@ static bool legacy_crtc_test(struct wlr_drm_connector *conn,
 	struct wlr_drm_crtc *crtc = conn->crtc;
 
 	if ((state->base->committed & WLR_OUTPUT_STATE_BUFFER) && !state->modeset) {
-		struct wlr_drm_fb *pending_fb = crtc->primary->pending_fb;
+		struct wlr_drm_fb *pending_fb = state->primary_fb;
 
 		struct wlr_drm_fb *prev_fb = crtc->primary->queued_fb;
 		if (!prev_fb) {
@@ -59,7 +59,7 @@ static bool legacy_crtc_test(struct wlr_drm_connector *conn,
 
 static bool legacy_crtc_commit(struct wlr_drm_connector *conn,
 		const struct wlr_drm_connector_state *state,
-		uint32_t flags, bool test_only) {
+		struct wlr_drm_page_flip *page_flip, uint32_t flags, bool test_only) {
 	if (!legacy_crtc_test(conn, state)) {
 		return false;
 	}
@@ -74,13 +74,12 @@ static bool legacy_crtc_commit(struct wlr_drm_connector *conn,
 
 	uint32_t fb_id = 0;
 	if (state->active) {
-		struct wlr_drm_fb *fb = plane_get_next_fb(crtc->primary);
-		if (fb == NULL) {
+		if (state->primary_fb == NULL) {
 			wlr_log(WLR_ERROR, "%s: failed to acquire primary FB",
 				conn->output.name);
 			return false;
 		}
-		fb_id = fb->id;
+		fb_id = state->primary_fb->id;
 	}
 
 	if (state->modeset) {
@@ -134,7 +133,7 @@ static bool legacy_crtc_commit(struct wlr_drm_connector *conn,
 	}
 
 	if (cursor != NULL && drm_connector_is_cursor_visible(conn)) {
-		struct wlr_drm_fb *cursor_fb = plane_get_next_fb(cursor);
+		struct wlr_drm_fb *cursor_fb = get_next_cursor_fb(conn);
 		if (cursor_fb == NULL) {
 			wlr_drm_conn_log(conn, WLR_DEBUG, "Failed to acquire cursor FB");
 			return false;
@@ -176,8 +175,7 @@ static bool legacy_crtc_commit(struct wlr_drm_connector *conn,
 	}
 
 	if (flags & DRM_MODE_PAGE_FLIP_EVENT) {
-		if (drmModePageFlip(drm->fd, crtc->id, fb_id,
-				DRM_MODE_PAGE_FLIP_EVENT, drm)) {
+		if (drmModePageFlip(drm->fd, crtc->id, fb_id, flags, page_flip)) {
 			wlr_drm_conn_log_errno(conn, WLR_ERROR, "drmModePageFlip failed");
 			return false;
 		}

@@ -10,15 +10,17 @@
 #include <wlr/util/log.h>
 #include <xf86drm.h>
 
+#include "config.h"
 #include "render/allocator/gbm.h"
 #include "render/drm_format_set.h"
 
 static const struct wlr_buffer_impl buffer_impl;
 
 static struct wlr_gbm_buffer *get_gbm_buffer_from_buffer(
-		struct wlr_buffer *buffer) {
-	assert(buffer->impl == &buffer_impl);
-	return (struct wlr_gbm_buffer *)buffer;
+		struct wlr_buffer *wlr_buffer) {
+	assert(wlr_buffer->impl == &buffer_impl);
+	struct wlr_gbm_buffer *buffer = wl_container_of(wlr_buffer, buffer, base);
+	return buffer;
 }
 
 static bool export_gbm_bo(struct gbm_bo *bo,
@@ -40,7 +42,7 @@ static bool export_gbm_bo(struct gbm_bo *bo,
 	int i;
 	int32_t handle = -1;
 	for (i = 0; i < attribs.n_planes; ++i) {
-#if HAS_GBM_BO_GET_FD_FOR_PLANE
+#if HAVE_GBM_BO_GET_FD_FOR_PLANE
 		(void)handle;
 
 		attribs.fd[i] = gbm_bo_get_fd_for_plane(bo, i);
@@ -77,7 +79,7 @@ static bool export_gbm_bo(struct gbm_bo *bo,
 		attribs.stride[i] = gbm_bo_get_stride_for_plane(bo, i);
 	}
 
-	memcpy(out, &attribs, sizeof(attribs));
+	*out = attribs;
 	return true;
 
 error_fd:
@@ -166,7 +168,7 @@ static bool buffer_get_dmabuf(struct wlr_buffer *wlr_buffer,
 		struct wlr_dmabuf_attributes *attribs) {
 	struct wlr_gbm_buffer *buffer =
 		get_gbm_buffer_from_buffer(wlr_buffer);
-	memcpy(attribs, &buffer->dmabuf, sizeof(buffer->dmabuf));
+	*attribs = buffer->dmabuf;
 	return true;
 }
 
@@ -178,9 +180,10 @@ static const struct wlr_buffer_impl buffer_impl = {
 static const struct wlr_allocator_interface allocator_impl;
 
 static struct wlr_gbm_allocator *get_gbm_alloc_from_alloc(
-		struct wlr_allocator *alloc) {
-	assert(alloc->impl == &allocator_impl);
-	return (struct wlr_gbm_allocator *)alloc;
+		struct wlr_allocator *wlr_alloc) {
+	assert(wlr_alloc->impl == &allocator_impl);
+	struct wlr_gbm_allocator *alloc = wl_container_of(wlr_alloc, alloc, base);
+	return alloc;
 }
 
 struct wlr_allocator *wlr_gbm_allocator_create(int fd) {

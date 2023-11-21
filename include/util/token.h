@@ -3,7 +3,14 @@
 
 #include <stdbool.h>
 
-#define TOKEN_STRLEN 33
-bool generate_token(char out[static TOKEN_STRLEN]);
+/**
+ * Number of bytes used by a token, including the terminating zero byte.
+ */
+#define TOKEN_SIZE 33
+
+/**
+ * Generate a random token string.
+ */
+bool generate_token(char out[static TOKEN_SIZE]);
 
 #endif

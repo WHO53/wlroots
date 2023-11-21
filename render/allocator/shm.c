@@ -17,7 +17,8 @@ static const struct wlr_buffer_impl buffer_impl;
 static struct wlr_shm_buffer *shm_buffer_from_buffer(
 		struct wlr_buffer *wlr_buffer) {
 	assert(wlr_buffer->impl == &buffer_impl);
-	return (struct wlr_shm_buffer *)wlr_buffer;
+	struct wlr_shm_buffer *buffer = wl_container_of(wlr_buffer, buffer, base);
+	return buffer;
 }
 
 static void buffer_destroy(struct wlr_buffer *wlr_buffer) {
@@ -30,7 +31,7 @@ static void buffer_destroy(struct wlr_buffer *wlr_buffer) {
 static bool buffer_get_shm(struct wlr_buffer *wlr_buffer,
 		struct wlr_shm_attributes *shm) {
 	struct wlr_shm_buffer *buffer = shm_buffer_from_buffer(wlr_buffer);
-	memcpy(shm, &buffer->shm, sizeof(*shm));
+	*shm = buffer->shm;
 	return true;
 }
 
@@ -71,8 +72,7 @@ static struct wlr_buffer *allocator_create_buffer(
 	wlr_buffer_init(&buffer->base, &buffer_impl, width, height);
 
 	// TODO: consider using a single file for multiple buffers
-	int bytes_per_pixel = info->bpp / 8;
-	int stride = width * bytes_per_pixel; // TODO: align?
+	int stride = pixel_format_info_min_stride(info, width); // TODO: align?
 	buffer->size = stride * height;
 	buffer->shm.fd = allocate_shm_file(buffer->size);
 	if (buffer->shm.fd < 0) {

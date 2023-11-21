@@ -70,8 +70,17 @@ struct wlr_seat_client *wlr_seat_client_from_pointer_resource(
 	return wl_resource_get_user_data(resource);
 }
 
+static void pointer_cursor_surface_handle_commit(struct wlr_surface *surface) {
+	pixman_region32_clear(&surface->input_region);
+	if (wlr_surface_has_buffer(surface)) {
+		wlr_surface_map(surface);
+	}
+}
+
 static const struct wlr_surface_role pointer_cursor_surface_role = {
 	.name = "wl_pointer-cursor",
+	.no_object = true,
+	.commit = pointer_cursor_surface_handle_commit,
 };
 
 static void pointer_set_cursor(struct wl_client *client,
@@ -87,10 +96,12 @@ static void pointer_set_cursor(struct wl_client *client,
 	struct wlr_surface *surface = NULL;
 	if (surface_resource != NULL) {
 		surface = wlr_surface_from_resource(surface_resource);
-		if (!wlr_surface_set_role(surface, &pointer_cursor_surface_role, NULL,
+		if (!wlr_surface_set_role(surface, &pointer_cursor_surface_role,
 				surface_resource, WL_POINTER_ERROR_ROLE)) {
 			return;
 		}
+
+		pointer_cursor_surface_handle_commit(surface);
 	}
 
 	struct wlr_seat_pointer_request_set_cursor_event event = {
@@ -114,7 +125,6 @@ static const struct wl_pointer_interface pointer_impl = {
 };
 
 static void pointer_handle_resource_destroy(struct wl_resource *resource) {
-	wl_list_remove(wl_resource_get_link(resource));
 	seat_client_destroy_pointer(resource);
 }
 
@@ -488,7 +498,6 @@ bool wlr_seat_pointer_has_grab(struct wlr_seat *seat) {
 	return seat->pointer_state.grab->interface != &default_pointer_grab_impl;
 }
 
-
 void seat_client_create_pointer(struct wlr_seat_client *seat_client,
 		uint32_t version, uint32_t id) {
 	struct wl_resource *resource = wl_resource_create(seat_client->client,
@@ -532,12 +541,20 @@ void seat_client_create_pointer(struct wlr_seat_client *seat_client,
 	}
 }
 
-void seat_client_destroy_pointer(struct wl_resource *resource) {
-	struct wlr_seat_client *seat_client =
-		wlr_seat_client_from_pointer_resource(resource);
-	if (seat_client == NULL) {
+void seat_client_create_inert_pointer(struct wl_client *client,
+		uint32_t version, uint32_t id) {
+	struct wl_resource *resource =
+		wl_resource_create(client, &wl_pointer_interface, version, id);
+	if (!resource) {
+		wl_client_post_no_memory(client);
 		return;
 	}
+	wl_resource_set_implementation(resource, &pointer_impl, NULL, NULL);
+}
+
+void seat_client_destroy_pointer(struct wl_resource *resource) {
+	wl_list_remove(wl_resource_get_link(resource));
+	wl_list_init(wl_resource_get_link(resource));
 	wl_resource_set_user_data(resource, NULL);
 }
 

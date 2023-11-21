@@ -87,9 +87,14 @@ static void output_frame_notify(struct wl_listener *listener, void *data) {
 	int32_t width, height;
 	wlr_output_effective_resolution(wlr_output, &width, &height);
 
-	wlr_output_attach_render(wlr_output, NULL);
-	wlr_renderer_begin(sample->renderer, wlr_output->width, wlr_output->height);
-	wlr_renderer_clear(sample->renderer, (float[]){0.25f, 0.25f, 0.25f, 1});
+	struct wlr_output_state output_state;
+	wlr_output_state_init(&output_state);
+	struct wlr_render_pass *pass = wlr_output_begin_render_pass(wlr_output, &output_state, NULL, NULL);
+
+	wlr_render_pass_add_rect(pass, &(struct wlr_render_rect_options){
+		.box = { .width = wlr_output->width, .height = wlr_output->height },
+		.color = { 0.25, 0.25, 0.25, 1 },
+	});
 
 	float distance = 0.8f * (1 - sample->distance);
 	float tool_color[4] = { distance, distance, distance, 1 };
@@ -102,12 +107,20 @@ static void output_frame_notify(struct wl_listener *listener, void *data) {
 	float pad_height = sample->height_mm * scale;
 	float left = width / 2.0f - pad_width / 2.0f;
 	float top = height / 2.0f - pad_height / 2.0f;
-	const struct wlr_box box = {
-		.x = left, .y = top,
-		.width = pad_width, .height = pad_height,
-	};
-	wlr_render_rect(sample->renderer, &box, sample->pad_color,
-		wlr_output->transform_matrix);
+	wlr_render_pass_add_rect(pass, &(struct wlr_render_rect_options){
+		.box = {
+			.x = left,
+			.y = top,
+			.width = pad_width,
+			.height = pad_height,
+		},
+		.color = {
+			sample->pad_color[0],
+			sample->pad_color[1],
+			sample->pad_color[2],
+			sample->pad_color[3],
+		},
+	});
 
 	if (sample->proximity) {
 		struct wlr_box box = {
@@ -116,21 +129,36 @@ static void output_frame_notify(struct wl_listener *listener, void *data) {
 			.width = 16 * (sample->pressure + 1),
 			.height = 16 * (sample->pressure + 1),
 		};
-		float matrix[9];
-		wlr_matrix_project_box(matrix, &box, WL_OUTPUT_TRANSFORM_NORMAL,
-			sample->ring, wlr_output->transform_matrix);
-		wlr_render_quad_with_matrix(sample->renderer, tool_color, matrix);
+
+		// TODO: use sample->ring
+		wlr_render_pass_add_rect(pass, &(struct wlr_render_rect_options){
+			.box = box,
+			.color = {
+				tool_color[0],
+				tool_color[1],
+				tool_color[2],
+				tool_color[3],
+			},
+		});
 
 		box.x += sample->x_tilt;
 		box.y += sample->y_tilt;
 		box.width /= 2;
 		box.height /= 2;
-		wlr_render_rect(sample->renderer, &box, tool_color,
-			wlr_output->transform_matrix);
+		wlr_render_pass_add_rect(pass, &(struct wlr_render_rect_options){
+			.box = box,
+			.color = {
+				tool_color[0],
+				tool_color[1],
+				tool_color[2],
+				tool_color[3],
+			},
+		});
 	}
 
-	wlr_renderer_end(sample->renderer);
-	wlr_output_commit(wlr_output);
+	wlr_render_pass_submit(pass);
+	wlr_output_commit_state(wlr_output, &output_state);
+	wlr_output_state_finish(&output_state);
 	sample->last_frame = now;
 }
 
@@ -242,7 +270,7 @@ static void new_output_notify(struct wl_listener *listener, void *data) {
 
 	wlr_output_init_render(output, sample->allocator, sample->renderer);
 
-	struct sample_output *sample_output = calloc(1, sizeof(struct sample_output));
+	struct sample_output *sample_output = calloc(1, sizeof(*sample_output));
 	sample_output->output = output;
 	sample_output->sample = sample;
 	wl_signal_add(&output->events.frame, &sample_output->frame);
@@ -250,12 +278,15 @@ static void new_output_notify(struct wl_listener *listener, void *data) {
 	wl_signal_add(&output->events.destroy, &sample_output->destroy);
 	sample_output->destroy.notify = output_remove_notify;
 
+	struct wlr_output_state state;
+	wlr_output_state_init(&state);
+	wlr_output_state_set_enabled(&state, true);
 	struct wlr_output_mode *mode = wlr_output_preferred_mode(output);
 	if (mode != NULL) {
-		wlr_output_set_mode(output, mode);
+		wlr_output_state_set_mode(&state, mode);
 	}
-
-	wlr_output_commit(output);
+	wlr_output_commit_state(output, &state);
+	wlr_output_state_finish(&state);
 }
 
 static void keyboard_key_notify(struct wl_listener *listener, void *data) {
@@ -286,7 +317,7 @@ static void new_input_notify(struct wl_listener *listener, void *data) {
 	struct sample_state *sample = wl_container_of(listener, sample, new_input);
 	switch (device->type) {
 	case WLR_INPUT_DEVICE_KEYBOARD:;
-		struct sample_keyboard *keyboard = calloc(1, sizeof(struct sample_keyboard));
+		struct sample_keyboard *keyboard = calloc(1, sizeof(*keyboard));
 		keyboard->wlr_keyboard = wlr_keyboard_from_input_device(device);
 		keyboard->sample = sample;
 		wl_signal_add(&device->events.destroy, &keyboard->destroy);
@@ -309,7 +340,7 @@ static void new_input_notify(struct wl_listener *listener, void *data) {
 		xkb_context_unref(context);
 		break;
 	case WLR_INPUT_DEVICE_TABLET_PAD:;
-		struct tablet_pad_state *pstate = calloc(sizeof(struct tablet_pad_state), 1);
+		struct tablet_pad_state *pstate = calloc(1, sizeof(*pstate));
 		pstate->wlr_tablet_pad = wlr_tablet_pad_from_input_device(device);
 		pstate->sample = sample;
 		pstate->destroy.notify = tablet_pad_destroy_notify;
@@ -327,7 +358,7 @@ static void new_input_notify(struct wl_listener *listener, void *data) {
 		sample->height_mm = tablet->height_mm == 0 ?
 			10 : tablet->height_mm;
 
-		struct tablet_tool_state *tstate = calloc(sizeof(struct tablet_tool_state), 1);
+		struct tablet_tool_state *tstate = calloc(1, sizeof(*tstate));
 		tstate->wlr_tablet = tablet;
 		tstate->sample = sample;
 		tstate->destroy.notify = tablet_tool_destroy_notify;
@@ -355,7 +386,7 @@ int main(int argc, char *argv[]) {
 	};
 	wl_list_init(&state.tablet_pads);
 	wl_list_init(&state.tablet_tools);
-	struct wlr_backend *wlr = wlr_backend_autocreate(display);
+	struct wlr_backend *wlr = wlr_backend_autocreate(display, NULL);
 	if (!wlr) {
 		exit(1);
 	}

@@ -15,8 +15,8 @@
 #include <wayland-server-core.h>
 #include <wlr/util/log.h>
 #include <wlr/xwayland.h>
+#include "config.h"
 #include "sockets.h"
-#include "xwayland/config.h"
 
 static void safe_close(int fd) {
 	if (fd >= 0) {
@@ -275,6 +275,7 @@ static int xserver_handle_ready(int fd, uint32_t mask, void *data) {
 	close(fd);
 	wl_event_source_remove(server->pipe_source);
 	server->pipe_source = NULL;
+	server->ready = true;
 
 	struct wlr_xwayland_server_ready_event event = {
 		.server = server,
@@ -365,6 +366,8 @@ static bool server_start(struct wlr_xwayland_server *server) {
 	server->pipe_source = wl_event_loop_add_fd(loop, notify_fd[0],
 		WL_EVENT_READABLE, xserver_handle_ready, server);
 
+	wl_signal_emit_mutable(&server->events.start, NULL);
+
 	server->pid = fork();
 	if (server->pid < 0) {
 		wlr_log_errno(WLR_ERROR, "fork failed");
@@ -424,11 +427,20 @@ static bool server_start_lazy(struct wlr_xwayland_server *server) {
 	return true;
 }
 
+static void handle_idle(void *data) {
+	struct wlr_xwayland_server *server = data;
+	server->idle_source = NULL;
+	server_start(server);
+}
+
 void wlr_xwayland_server_destroy(struct wlr_xwayland_server *server) {
 	if (!server) {
 		return;
 	}
 
+	if (server->idle_source != NULL) {
+		wl_event_source_remove(server->idle_source);
+	}
 	server_finish_process(server);
 	server_finish_display(server);
 	wl_signal_emit_mutable(&server->events.destroy, NULL);
@@ -443,8 +455,7 @@ struct wlr_xwayland_server *wlr_xwayland_server_create(
 		return NULL;
 	}
 
-	struct wlr_xwayland_server *server =
-		calloc(1, sizeof(struct wlr_xwayland_server));
+	struct wlr_xwayland_server *server = calloc(1, sizeof(*server));
 	if (!server) {
 		return NULL;
 	}
@@ -460,6 +471,7 @@ struct wlr_xwayland_server *wlr_xwayland_server_create(
 	server->wl_fd[0] = server->wl_fd[1] = -1;
 	server->wm_fd[0] = server->wm_fd[1] = -1;
 
+	wl_signal_init(&server->events.start);
 	wl_signal_init(&server->events.ready);
 	wl_signal_init(&server->events.destroy);
 
@@ -472,7 +484,9 @@ struct wlr_xwayland_server *wlr_xwayland_server_create(
 			goto error_display;
 		}
 	} else {
-		if (!server_start(server)) {
+		struct wl_event_loop *loop = wl_display_get_event_loop(wl_display);
+		server->idle_source = wl_event_loop_add_idle(loop, handle_idle, server);
+		if (server->idle_source == NULL) {
 			goto error_display;
 		}
 	}

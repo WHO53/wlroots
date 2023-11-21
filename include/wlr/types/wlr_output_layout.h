@@ -28,7 +28,7 @@ struct wlr_output_layout {
 	struct wl_list outputs;
 
 	struct {
-		struct wl_signal add;
+		struct wl_signal add; // struct wlr_output_layout_output
 		struct wl_signal change;
 		struct wl_signal destroy;
 	} events;
@@ -36,18 +36,25 @@ struct wlr_output_layout {
 	void *data;
 };
 
-struct wlr_output_layout_output_state;
-
 struct wlr_output_layout_output {
+	struct wlr_output_layout *layout;
+
 	struct wlr_output *output;
+
 	int x, y;
 	struct wl_list link;
-	struct wlr_output_layout_output_state *state;
 
-	struct wlr_addon addon;
+	bool auto_configured;
+
 	struct {
 		struct wl_signal destroy;
 	} events;
+
+	// private state
+
+	struct wlr_addon addon;
+
+	struct wl_listener commit;
 };
 
 struct wlr_output_layout *wlr_output_layout_create(void);
@@ -59,48 +66,65 @@ void wlr_output_layout_destroy(struct wlr_output_layout *layout);
  * matches.
  */
 struct wlr_output_layout_output *wlr_output_layout_get(
-		struct wlr_output_layout *layout, struct wlr_output *reference);
+	struct wlr_output_layout *layout, struct wlr_output *reference);
 
 /**
  * Get the output at the specified layout coordinates. Returns NULL if no
  * output matches the coordinates.
  */
-struct wlr_output *wlr_output_layout_output_at(struct wlr_output_layout *layout,
-		double lx, double ly);
+struct wlr_output *wlr_output_layout_output_at(
+	struct wlr_output_layout *layout, double lx, double ly);
 
 /**
  * Add the output to the layout at the specified coordinates. If the output is
- * already part of the output layout, this moves the output.
+ * already a part of the output layout, it will become manually configured and
+ * will be moved to the specified coordinates.
+ *
+ * Returns true on success, false on a memory allocation error.
  */
-void wlr_output_layout_add(struct wlr_output_layout *layout,
-		struct wlr_output *output, int lx, int ly);
+struct wlr_output_layout_output *wlr_output_layout_add(struct wlr_output_layout *layout,
+	struct wlr_output *output, int lx, int ly);
 
-void wlr_output_layout_move(struct wlr_output_layout *layout,
-		struct wlr_output *output, int lx, int ly);
+/**
+ * Add the output to the layout as automatically configured. This will place
+ * the output in a sensible location in the layout. The coordinates of
+ * the output in the layout will be adjusted dynamically when the layout
+ * changes. If the output is already a part of the layout, it will become
+ * automatically configured.
+ *
+ * Returns true on success, false on a memory allocation error.
+ */
+struct wlr_output_layout_output *wlr_output_layout_add_auto(struct wlr_output_layout *layout,
+	struct wlr_output *output);
 
+/**
+ * Remove the output from the layout. If the output is already not a part of
+ * the layout, this function is a no-op.
+ */
 void wlr_output_layout_remove(struct wlr_output_layout *layout,
-		struct wlr_output *output);
+	struct wlr_output *output);
 
 /**
  * Given x and y in layout coordinates, adjusts them to local output
  * coordinates relative to the given reference output.
  */
 void wlr_output_layout_output_coords(struct wlr_output_layout *layout,
-		struct wlr_output *reference, double *lx, double *ly);
+	struct wlr_output *reference, double *lx, double *ly);
 
 bool wlr_output_layout_contains_point(struct wlr_output_layout *layout,
-		struct wlr_output *reference, int lx, int ly);
+	struct wlr_output *reference, int lx, int ly);
 
 bool wlr_output_layout_intersects(struct wlr_output_layout *layout,
-		struct wlr_output *reference, const struct wlr_box *target_lbox);
+	struct wlr_output *reference, const struct wlr_box *target_lbox);
 
 /**
  * Get the closest point on this layout from the given point from the reference
  * output. If reference is NULL, gets the closest point from the entire layout.
+ * If the layout is empty, the result is the given point itself.
  */
 void wlr_output_layout_closest_point(struct wlr_output_layout *layout,
-		struct wlr_output *reference, double lx, double ly, double *dest_lx,
-		double *dest_ly);
+	struct wlr_output *reference, double lx, double ly,
+	double *dest_lx, double *dest_ly);
 
 /**
  * Get the box of the layout for the given reference output in layout
@@ -108,24 +132,13 @@ void wlr_output_layout_closest_point(struct wlr_output_layout *layout,
  * entire layout. If the output isn't in the layout, the box will be empty.
  */
 void wlr_output_layout_get_box(struct wlr_output_layout *layout,
-		struct wlr_output *reference, struct wlr_box *dest_box);
-
-/**
-* Add an auto configured output to the layout. This will place the output in a
-* sensible location in the layout. The coordinates of the output in the layout
-* may adjust dynamically when the layout changes. If the output is already in
-* the layout, it will become auto configured. If the position of the output is
-* set such as with wlr_output_layout_move(), the output will become manually
-* configured.
-*/
-void wlr_output_layout_add_auto(struct wlr_output_layout *layout,
-		struct wlr_output *output);
+	struct wlr_output *reference, struct wlr_box *dest_box);
 
 /**
  * Get the output closest to the center of the layout extents.
  */
 struct wlr_output *wlr_output_layout_get_center_output(
-		struct wlr_output_layout *layout);
+	struct wlr_output_layout *layout);
 
 enum wlr_direction {
 	WLR_DIRECTION_UP = 1 << 0,
@@ -139,10 +152,10 @@ enum wlr_direction {
  * point in the given direction.
  */
 struct wlr_output *wlr_output_layout_adjacent_output(
-		struct wlr_output_layout *layout, enum wlr_direction direction,
-		struct wlr_output *reference, double ref_lx, double ref_ly);
+	struct wlr_output_layout *layout, enum wlr_direction direction,
+	struct wlr_output *reference, double ref_lx, double ref_ly);
 struct wlr_output *wlr_output_layout_farthest_output(
-		struct wlr_output_layout *layout, enum wlr_direction direction,
-		struct wlr_output *reference, double ref_lx, double ref_ly);
+	struct wlr_output_layout *layout, enum wlr_direction direction,
+	struct wlr_output *reference, double ref_lx, double ref_ly);
 
 #endif

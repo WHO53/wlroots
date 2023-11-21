@@ -10,6 +10,7 @@
 #include <wlr/types/wlr_drm.h>
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/types/wlr_matrix.h>
+#include <wlr/types/wlr_shm.h>
 #include <wlr/util/box.h>
 #include <wlr/util/log.h>
 #include <xf86drm.h>
@@ -26,24 +27,29 @@
 #endif // WLR_HAS_VULKAN_RENDERER
 
 #include "backend/backend.h"
+#include "render/pass.h"
 #include "render/pixel_format.h"
 #include "render/wlr_renderer.h"
 #include "util/env.h"
 
 void wlr_renderer_init(struct wlr_renderer *renderer,
 		const struct wlr_renderer_impl *impl) {
-	assert(impl->begin);
-	assert(impl->clear);
-	assert(impl->scissor);
-	assert(impl->render_subtexture_with_matrix);
-	assert(impl->render_quad_with_matrix);
+	if (!impl->begin_buffer_pass) {
+		assert(impl->begin);
+		assert(impl->clear);
+		assert(impl->scissor);
+		assert(impl->render_subtexture_with_matrix);
+		assert(impl->render_quad_with_matrix);
+	}
 	assert(impl->get_shm_texture_formats);
 	assert(impl->get_render_buffer_caps);
 
-	memset(renderer, 0, sizeof(*renderer));
-	renderer->impl = impl;
+	*renderer = (struct wlr_renderer){
+		.impl = impl,
+	};
 
 	wl_signal_init(&renderer->events.destroy);
+	wl_signal_init(&renderer->events.lost);
 }
 
 void wlr_renderer_destroy(struct wlr_renderer *r) {
@@ -70,12 +76,15 @@ bool renderer_bind_buffer(struct wlr_renderer *r, struct wlr_buffer *buffer) {
 	return r->impl->bind_buffer(r, buffer);
 }
 
-void wlr_renderer_begin(struct wlr_renderer *r, uint32_t width, uint32_t height) {
+bool wlr_renderer_begin(struct wlr_renderer *r, uint32_t width, uint32_t height) {
 	assert(!r->rendering);
 
-	r->impl->begin(r, width, height);
+	if (!r->impl->begin(r, width, height)) {
+		return false;
+	}
 
 	r->rendering = true;
+	return true;
 }
 
 bool wlr_renderer_begin_with_buffer(struct wlr_renderer *r,
@@ -83,7 +92,10 @@ bool wlr_renderer_begin_with_buffer(struct wlr_renderer *r,
 	if (!renderer_bind_buffer(r, buffer)) {
 		return false;
 	}
-	wlr_renderer_begin(r, buffer->width, buffer->height);
+	if (!wlr_renderer_begin(r, buffer->width, buffer->height)) {
+		renderer_bind_buffer(r, NULL);
+		return false;
+	}
 	r->rendering_with_buffer = true;
 	return true;
 }
@@ -145,6 +157,7 @@ bool wlr_render_subtexture_with_matrix(struct wlr_renderer *r,
 		struct wlr_texture *texture, const struct wlr_fbox *box,
 		const float matrix[static 9], float alpha) {
 	assert(r->rendering);
+	assert(texture->renderer == r);
 	return r->impl->render_subtexture_with_matrix(r, texture,
 		box, matrix, alpha);
 }
@@ -206,42 +219,7 @@ bool wlr_renderer_read_pixels(struct wlr_renderer *r, uint32_t fmt,
 
 bool wlr_renderer_init_wl_shm(struct wlr_renderer *r,
 		struct wl_display *wl_display) {
-	if (wl_display_init_shm(wl_display) != 0) {
-		wlr_log(WLR_ERROR, "Failed to initialize wl_shm");
-		return false;
-	}
-
-	size_t len;
-	const uint32_t *formats = wlr_renderer_get_shm_texture_formats(r, &len);
-	if (formats == NULL) {
-		wlr_log(WLR_ERROR, "Failed to initialize wl_shm: "
-			"cannot get renderer formats");
-		return false;
-	}
-
-	bool argb8888 = false, xrgb8888 = false;
-	for (size_t i = 0; i < len; ++i) {
-		// ARGB8888 and XRGB8888 must be supported and are implicitly
-		// advertised by wl_display_init_shm
-		enum wl_shm_format fmt = convert_drm_format_to_wl_shm(formats[i]);
-		switch (fmt) {
-		case WL_SHM_FORMAT_ARGB8888:
-			argb8888 = true;
-			break;
-		case WL_SHM_FORMAT_XRGB8888:
-			xrgb8888 = true;
-			break;
-		default:
-			if (wl_display_add_shm_format(wl_display, fmt) == NULL) {
-				wlr_log(WLR_ERROR, "Failed to initialize wl_shm: "
-					"failed to add format");
-				return false;
-			}
-		}
-	}
-	assert(argb8888 && xrgb8888);
-
-	return true;
+	return wlr_shm_create_with_renderer(wl_display, 1, r) != NULL;
 }
 
 bool wlr_renderer_init_wl_display(struct wlr_renderer *r,
@@ -259,81 +237,12 @@ bool wlr_renderer_init_wl_display(struct wlr_renderer *r,
 			wlr_log(WLR_INFO, "Cannot get renderer DRM FD, disabling wl_drm");
 		}
 
-		if (wlr_linux_dmabuf_v1_create(wl_display, r) == NULL) {
+		if (wlr_linux_dmabuf_v1_create_with_renderer(wl_display, 4, r) == NULL) {
 			return false;
 		}
 	}
 
 	return true;
-}
-
-static void log_creation_failure(bool is_auto, const char *msg) {
-	wlr_log(is_auto ? WLR_DEBUG : WLR_ERROR, "%s%s", msg, is_auto ? ". Skipping!" : "");
-}
-
-struct wlr_renderer *renderer_autocreate_with_drm_fd(int drm_fd) {
-	const char *renderer_options[] = {
-		"auto",
-#if WLR_HAS_GLES2_RENDERER
-		"gles2",
-#endif
-#if WLR_HAS_VULKAN_RENDERER
-		"vulkan",
-#endif
-		"pixman",
-		NULL
-	};
-
-	const char *renderer_name = renderer_options[env_parse_switch("WLR_RENDERER", renderer_options)];
-	bool is_auto = strcmp(renderer_name, "auto") == 0;
-	struct wlr_renderer *renderer = NULL;
-
-#if WLR_HAS_GLES2_RENDERER
-	if (!renderer && (is_auto || strcmp(renderer_name, "gles2") == 0)) {
-		if (drm_fd < 0) {
-			log_creation_failure(is_auto, "Cannot create GLES2 renderer: no DRM FD available");
-		} else {
-			renderer = wlr_gles2_renderer_create_with_drm_fd(drm_fd);
-			if (!renderer) {
-				log_creation_failure(is_auto, "Failed to create a GLES2 renderer");
-			}
-		}
-	}
-#endif
-
-#if WLR_HAS_VULKAN_RENDERER
-	if (!renderer && strcmp(renderer_name, "vulkan") == 0) {
-		if (drm_fd < 0) {
-			log_creation_failure(is_auto, "Cannot create Vulkan renderer: no DRM FD available");
-		} else {
-			renderer = wlr_vk_renderer_create_with_drm_fd(drm_fd);
-			if (!renderer) {
-				log_creation_failure(is_auto, "Failed to create a Vulkan renderer");
-			}
-		}
-	}
-#endif
-
-	bool has_render_node = false;
-	if (!renderer && is_auto && drm_fd >= 0) {
-		char *render_node = drmGetRenderDeviceNameFromFd(drm_fd);
-		has_render_node = render_node != NULL;
-		free(render_node);
-	}
-
-	if (!renderer && ((is_auto && !has_render_node) ||
-			strcmp(renderer_name, "pixman") == 0)) {
-		renderer = wlr_pixman_renderer_create();
-		if (!renderer) {
-			log_creation_failure(is_auto, "Failed to create a pixman renderer");
-		}
-	}
-
-	if (!renderer) {
-		wlr_log(WLR_ERROR, "Could not initialize renderer");
-	}
-
-	return renderer;
 }
 
 static int open_drm_render_node(void) {
@@ -343,7 +252,7 @@ static int open_drm_render_node(void) {
 		wlr_log(WLR_ERROR, "drmGetDevices2 failed: %s", strerror(-devices_len));
 		return -1;
 	}
-	drmDevice **devices = calloc(devices_len, sizeof(drmDevice *));
+	drmDevice **devices = calloc(devices_len, sizeof(*devices));
 	if (devices == NULL) {
 		wlr_log_errno(WLR_ERROR, "Allocation failed");
 		return -1;
@@ -382,9 +291,11 @@ out:
 	return fd;
 }
 
-struct wlr_renderer *wlr_renderer_autocreate(struct wlr_backend *backend) {
-	int drm_fd = -1;
-	int render_drm_fd = -1;
+static bool open_preferred_drm_fd(struct wlr_backend *backend, int *drm_fd_ptr,
+		bool *own_drm_fd) {
+	if (*drm_fd_ptr >= 0) {
+		return true;
+	}
 
 	// Allow the user to override the render node
 	const char *render_name = getenv("WLR_RENDER_DRM_DEVICE");
@@ -392,39 +303,142 @@ struct wlr_renderer *wlr_renderer_autocreate(struct wlr_backend *backend) {
 		wlr_log(WLR_INFO,
 			"Opening DRM render node '%s' from WLR_RENDER_DRM_DEVICE",
 			render_name);
-		render_drm_fd = open(render_name, O_RDWR | O_CLOEXEC);
-		if (render_drm_fd < 0) {
+		int drm_fd = open(render_name, O_RDWR | O_CLOEXEC);
+		if (drm_fd < 0) {
 			wlr_log_errno(WLR_ERROR, "Failed to open '%s'", render_name);
-			return NULL;
+			return false;
 		}
-		if (drmGetNodeTypeFromFd(render_drm_fd) != DRM_NODE_RENDER) {
+		if (drmGetNodeTypeFromFd(drm_fd) != DRM_NODE_RENDER) {
 			wlr_log(WLR_ERROR, "'%s' is not a DRM render node", render_name);
-			close(render_drm_fd);
-			return NULL;
+			close(drm_fd);
+			return false;
 		}
-		drm_fd = render_drm_fd;
+		*drm_fd_ptr = drm_fd;
+		*own_drm_fd = true;
+		return true;
 	}
 
-	if (drm_fd < 0) {
-		drm_fd = wlr_backend_get_drm_fd(backend);
+	// Prefer the backend's DRM node, if any
+	int backend_drm_fd = wlr_backend_get_drm_fd(backend);
+	if (backend_drm_fd >= 0) {
+		*drm_fd_ptr = backend_drm_fd;
+		*own_drm_fd = false;
+		return true;
 	}
 
 	// If the backend hasn't picked a DRM FD, but accepts DMA-BUFs, pick an
 	// arbitrary render node
 	uint32_t backend_caps = backend_get_buffer_caps(backend);
-	if (drm_fd < 0 && (backend_caps & WLR_BUFFER_CAP_DMABUF) != 0) {
-		render_drm_fd = open_drm_render_node();
-		drm_fd = render_drm_fd;
+	if (backend_caps & WLR_BUFFER_CAP_DMABUF) {
+		int drm_fd = open_drm_render_node();
+		if (drm_fd < 0) {
+			return false;
+		}
+		*drm_fd_ptr = drm_fd;
+		*own_drm_fd = true;
+		return true;
 	}
 
-	// Note, drm_fd may be negative if unavailable
-	struct wlr_renderer *renderer = renderer_autocreate_with_drm_fd(drm_fd);
+	return false;
+}
 
-	if (render_drm_fd >= 0) {
-		close(render_drm_fd);
+static void log_creation_failure(bool is_auto, const char *msg) {
+	wlr_log(is_auto ? WLR_DEBUG : WLR_ERROR, "%s%s", msg, is_auto ? ". Skipping!" : "");
+}
+
+static bool has_render_node(struct wlr_backend *backend) {
+	if (!backend) {
+		return false;
 	}
 
+	int backend_drm_fd = wlr_backend_get_drm_fd(backend);
+	if (backend_drm_fd < 0) {
+		return false;
+	}
+
+	char *render_node = drmGetRenderDeviceNameFromFd(backend_drm_fd);
+	bool has_render_node = render_node != NULL;
+	free(render_node);
+
+	return has_render_node;
+}
+
+static struct wlr_renderer *renderer_autocreate(struct wlr_backend *backend, int drm_fd) {
+	const char *renderer_options[] = {
+		"auto",
+		"gles2",
+		"vulkan",
+		"pixman",
+		NULL
+	};
+
+	const char *renderer_name = renderer_options[env_parse_switch("WLR_RENDERER", renderer_options)];
+	bool is_auto = strcmp(renderer_name, "auto") == 0;
+	struct wlr_renderer *renderer = NULL;
+
+	bool own_drm_fd = false;
+
+	if ((is_auto && WLR_HAS_GLES2_RENDERER) || strcmp(renderer_name, "gles2") == 0) {
+		if (!open_preferred_drm_fd(backend, &drm_fd, &own_drm_fd)) {
+			log_creation_failure(is_auto, "Cannot create GLES2 renderer: no DRM FD available");
+		} else {
+#if WLR_HAS_GLES2_RENDERER
+			renderer = wlr_gles2_renderer_create_with_drm_fd(drm_fd);
+#else
+			wlr_log(WLR_ERROR, "Cannot create GLES renderer: disabled at compile-time");
+#endif
+			if (renderer) {
+				goto out;
+			} else {
+				log_creation_failure(is_auto, "Failed to create a GLES2 renderer");
+			}
+		}
+	}
+
+	if (strcmp(renderer_name, "vulkan") == 0) {
+		if (!open_preferred_drm_fd(backend, &drm_fd, &own_drm_fd)) {
+			log_creation_failure(is_auto, "Cannot create Vulkan renderer: no DRM FD available");
+		} else {
+#if WLR_HAS_VULKAN_RENDERER
+			renderer = wlr_vk_renderer_create_with_drm_fd(drm_fd);
+#else
+			wlr_log(WLR_ERROR, "Cannot create Vulkan renderer: disabled at compile-time");
+#endif
+			if (renderer) {
+				goto out;
+			} else {
+				log_creation_failure(is_auto, "Failed to create a Vulkan renderer");
+			}
+		}
+	}
+
+	if ((is_auto && !has_render_node(backend)) || strcmp(renderer_name, "pixman") == 0) {
+		renderer = wlr_pixman_renderer_create();
+		if (renderer) {
+			goto out;
+		} else {
+			log_creation_failure(is_auto, "Failed to create a pixman renderer");
+		}
+	}
+
+out:
+	if (renderer == NULL) {
+		wlr_log(WLR_ERROR, "Could not initialize renderer");
+	}
+	if (own_drm_fd && drm_fd >= 0) {
+		close(drm_fd);
+	}
 	return renderer;
+}
+
+struct wlr_renderer *renderer_autocreate_with_drm_fd(int drm_fd) {
+	assert(drm_fd >= 0);
+
+	return renderer_autocreate(NULL, drm_fd);
+}
+
+struct wlr_renderer *wlr_renderer_autocreate(struct wlr_backend *backend) {
+	return renderer_autocreate(backend, -1);
 }
 
 int wlr_renderer_get_drm_fd(struct wlr_renderer *r) {
@@ -432,4 +446,39 @@ int wlr_renderer_get_drm_fd(struct wlr_renderer *r) {
 		return -1;
 	}
 	return r->impl->get_drm_fd(r);
+}
+
+struct wlr_render_pass *wlr_renderer_begin_buffer_pass(struct wlr_renderer *renderer,
+		struct wlr_buffer *buffer, const struct wlr_buffer_pass_options *options) {
+	if (!renderer->impl->begin_buffer_pass) {
+		return begin_legacy_buffer_render_pass(renderer, buffer);
+	}
+
+	struct wlr_buffer_pass_options default_options = {0};
+	if (!options) {
+		options = &default_options;
+	}
+
+	return renderer->impl->begin_buffer_pass(renderer, buffer, options);
+}
+
+struct wlr_render_timer *wlr_render_timer_create(struct wlr_renderer *renderer) {
+	if (!renderer->impl->render_timer_create) {
+		return NULL;
+	}
+	return renderer->impl->render_timer_create(renderer);
+}
+
+int wlr_render_timer_get_duration_ns(struct wlr_render_timer *timer) {
+	if (!timer->impl->get_duration_ns) {
+		return -1;
+	}
+	return timer->impl->get_duration_ns(timer);
+}
+
+void wlr_render_timer_destroy(struct wlr_render_timer *timer) {
+	if (!timer->impl->destroy) {
+		return;
+	}
+	timer->impl->destroy(timer);
 }

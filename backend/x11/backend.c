@@ -154,7 +154,8 @@ static int x11_event(int fd, uint32_t mask, void *data) {
 struct wlr_x11_backend *get_x11_backend_from_backend(
 		struct wlr_backend *wlr_backend) {
 	assert(wlr_backend_is_x11(wlr_backend));
-	return (struct wlr_x11_backend *)wlr_backend;
+	struct wlr_x11_backend *backend = wl_container_of(wlr_backend, backend, backend);
+	return backend;
 }
 
 static bool backend_start(struct wlr_backend *backend) {
@@ -198,7 +199,7 @@ static void backend_destroy(struct wlr_backend *backend) {
 	wlr_drm_format_set_finish(&x11->dri3_formats);
 	wlr_drm_format_set_finish(&x11->shm_formats);
 
-#if HAS_XCB_ERRORS
+#if HAVE_XCB_ERRORS
 	xcb_errors_context_free(x11->errors_context);
 #endif
 
@@ -448,16 +449,20 @@ struct wlr_backend *wlr_x11_backend_create(struct wl_display *display,
 			xcb_dri3_query_version(x11->xcb, 1, 2);
 		xcb_dri3_query_version_reply_t *dri3_reply =
 			xcb_dri3_query_version_reply(x11->xcb, dri3_cookie, NULL);
-		if (dri3_reply && dri3_reply->major_version >= 1) {
-			x11->have_dri3 = true;
-			x11->dri3_major_version = dri3_reply->major_version;
-			x11->dri3_minor_version = dri3_reply->minor_version;
+		if (dri3_reply) {
+			if (dri3_reply->major_version >= 1) {
+				x11->have_dri3 = true;
+				x11->dri3_major_version = dri3_reply->major_version;
+				x11->dri3_minor_version = dri3_reply->minor_version;
+			} else {
+				wlr_log(WLR_INFO, "X11 does not support required DRI3 version "
+					"(has %"PRIu32".%"PRIu32", want 1.0)",
+					dri3_reply->major_version, dri3_reply->minor_version);
+			}
+			free(dri3_reply);
 		} else {
-			wlr_log(WLR_INFO, "X11 does not support required DRI3 version "
-				"(has %"PRIu32".%"PRIu32", want 1.0)",
-				dri3_reply->major_version, dri3_reply->minor_version);
+			wlr_log(WLR_INFO, "X11 does not support required DRi3 version");
 		}
-		free(dri3_reply);
 	} else {
 		wlr_log(WLR_INFO, "X11 does not support DRI3 extension");
 	}
@@ -629,7 +634,7 @@ struct wlr_backend *wlr_x11_backend_create(struct wl_display *display,
 			shm_format->format, DRM_FORMAT_MOD_INVALID);
 	}
 
-#if HAS_XCB_ERRORS
+#if HAVE_XCB_ERRORS
 	if (xcb_errors_context_new(x11->xcb, &x11->errors_context) != 0) {
 		wlr_log(WLR_ERROR, "Failed to create error context");
 		return false;
@@ -673,7 +678,7 @@ error_x11:
 }
 
 static void handle_x11_error(struct wlr_x11_backend *x11, xcb_value_error_t *ev) {
-#if HAS_XCB_ERRORS
+#if HAVE_XCB_ERRORS
 	const char *major_name = xcb_errors_get_name_for_major_code(
 		x11->errors_context, ev->major_opcode);
 	if (!major_name) {
@@ -711,7 +716,7 @@ log_raw:
 
 static void handle_x11_unknown_event(struct wlr_x11_backend *x11,
 		xcb_generic_event_t *ev) {
-#if HAS_XCB_ERRORS
+#if HAVE_XCB_ERRORS
 	const char *extension;
 	const char *event_name = xcb_errors_get_name_for_xcb_event(
 		x11->errors_context, ev, &extension);

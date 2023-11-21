@@ -22,7 +22,7 @@ struct wlr_tablet_manager_client_v2 {
 	struct wl_resource *resource;
 	struct wlr_tablet_manager_v2 *manager;
 
-	struct wl_list tablet_seats; // wlr_tablet_seat_client_v2::link
+	struct wl_list tablet_seats; // wlr_tablet_seat_client_v2.link
 };
 
 static void tablet_seat_destroy(struct wlr_tablet_seat_v2 *seat) {
@@ -45,8 +45,7 @@ static void handle_wlr_seat_destroy(struct wl_listener *listener, void *data) {
 static struct wlr_tablet_seat_v2 *create_tablet_seat(
 		struct wlr_tablet_manager_v2 *manager,
 		struct wlr_seat *wlr_seat) {
-	struct wlr_tablet_seat_v2 *tablet_seat =
-		calloc(1, sizeof(struct wlr_tablet_seat_v2));
+	struct wlr_tablet_seat_v2 *tablet_seat = calloc(1, sizeof(*tablet_seat));
 	if (!tablet_seat) {
 		return NULL;
 	}
@@ -154,7 +153,19 @@ static void get_tablet_seat(struct wl_client *wl_client, struct wl_resource *res
 			tablet_seat_client_v2_destroy);
 		return;
 	}
+	struct wl_resource *tablet_seat_resource = wl_resource_create(wl_client,
+		&zwp_tablet_seat_v2_interface, TABLET_MANAGER_VERSION, id);
+	if (tablet_seat_resource == NULL) {
+		wl_client_post_no_memory(wl_client);
+		return;
+	}
+	wl_resource_set_implementation(tablet_seat_resource, &seat_impl, NULL,
+		tablet_seat_client_v2_destroy);
+
 	struct wlr_seat_client *seat = wlr_seat_client_from_resource(seat_resource);
+	if (seat == NULL) {
+		return;
+	}
 	struct wlr_tablet_seat_v2 *tablet_seat =
 		get_or_create_tablet_seat(manager->manager, seat->seat);
 
@@ -163,30 +174,20 @@ static void get_tablet_seat(struct wl_client *wl_client, struct wl_resource *res
 		return;
 	}
 
-	struct wlr_tablet_seat_client_v2 *seat_client =
-		calloc(1, sizeof(struct wlr_tablet_seat_client_v2));
+	struct wlr_tablet_seat_client_v2 *seat_client = calloc(1, sizeof(*seat_client));
 	if (seat_client == NULL) {
 		wl_client_post_no_memory(wl_client);
 		return;
 	}
 
-	seat_client->resource =
-		wl_resource_create(wl_client, &zwp_tablet_seat_v2_interface, TABLET_MANAGER_VERSION, id);
-	if (seat_client->resource == NULL) {
-		free(seat_client);
-		wl_client_post_no_memory(wl_client);
-		return;
-	}
-	wl_resource_set_implementation(seat_client->resource, &seat_impl, seat_client,
-		tablet_seat_client_v2_destroy);
-
-
+	seat_client->resource = tablet_seat_resource;
 	seat_client->seat_client = seat;
 	seat_client->client = manager;
 	seat_client->wl_client = wl_client;
 	wl_list_init(&seat_client->tools);
 	wl_list_init(&seat_client->tablets);
 	wl_list_init(&seat_client->pads);
+	wl_resource_set_user_data(tablet_seat_resource, seat_client);
 
 	seat_client->seat_client_destroy.notify = handle_seat_client_destroy;
 	wl_signal_add(&seat->events.destroy, &seat_client->seat_client_destroy);
@@ -245,10 +246,8 @@ static void wlr_tablet_manager_v2_destroy(struct wl_resource *resource) {
 static void tablet_v2_bind(struct wl_client *wl_client, void *data,
 		uint32_t version, uint32_t id) {
 	struct wlr_tablet_manager_v2 *manager = data;
-	assert(wl_client && manager);
 
-	struct wlr_tablet_manager_client_v2 *client =
-		calloc(1, sizeof(struct wlr_tablet_manager_client_v2));
+	struct wlr_tablet_manager_client_v2 *client = calloc(1, sizeof(*client));
 	if (client == NULL) {
 		wl_client_post_no_memory(wl_client);
 		return;
@@ -281,8 +280,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 }
 
 struct wlr_tablet_manager_v2 *wlr_tablet_v2_create(struct wl_display *display) {
-	struct wlr_tablet_manager_v2 *tablet =
-		calloc(1, sizeof(struct wlr_tablet_manager_v2));
+	struct wlr_tablet_manager_v2 *tablet = calloc(1, sizeof(*tablet));
 	if (!tablet) {
 		return NULL;
 	}

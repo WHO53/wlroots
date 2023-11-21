@@ -59,19 +59,28 @@ static void output_frame_notify(struct wl_listener *listener, void *data) {
 	int32_t width, height;
 	wlr_output_effective_resolution(wlr_output, &width, &height);
 
-	wlr_output_attach_render(wlr_output, NULL);
-	wlr_renderer_begin(sample->renderer, wlr_output->width, wlr_output->height);
-	wlr_renderer_clear(sample->renderer, (float[]){0.25f, 0.25f, 0.25f, 1});
+	struct wlr_output_state output_state;
+	wlr_output_state_init(&output_state);
+	struct wlr_render_pass *pass = wlr_output_begin_render_pass(wlr_output, &output_state, NULL, NULL);
+
+	wlr_render_pass_add_rect(pass, &(struct wlr_render_rect_options){
+		.box = { .width = wlr_output->width, .height = wlr_output->height },
+		.color = { 0.25, 0.25, 0.25, 1 },
+	});
 
 	for (int y = -128 + (int)sample_output->y_offs; y < height; y += 128) {
 		for (int x = -128 + (int)sample_output->x_offs; x < width; x += 128) {
-			wlr_render_texture(sample->renderer, sample->cat_texture,
-				wlr_output->transform_matrix, x, y, 1.0f);
+			wlr_render_pass_add_texture(pass, &(struct wlr_render_texture_options){
+				.texture = sample->cat_texture,
+				.dst_box = { .x = x, .y = y },
+				.transform = wlr_output->transform,
+			});
 		}
 	}
 
-	wlr_renderer_end(sample->renderer);
-	wlr_output_commit(wlr_output);
+	wlr_render_pass_submit(pass);
+	wlr_output_commit_state(wlr_output, &output_state);
+	wlr_output_state_finish(&output_state);
 
 	long ms = (now.tv_sec - sample->last_frame.tv_sec) * 1000 +
 		(now.tv_nsec - sample->last_frame.tv_nsec) / 1000000;
@@ -110,11 +119,10 @@ static void new_output_notify(struct wl_listener *listener, void *data) {
 
 	wlr_output_init_render(output, sample->allocator, sample->renderer);
 
-	struct sample_output *sample_output = calloc(1, sizeof(struct sample_output));
+	struct sample_output *sample_output = calloc(1, sizeof(*sample_output));
 	sample_output->x_offs = sample_output->y_offs = 0;
 	sample_output->x_vel = sample_output->y_vel = 128;
 
-	wlr_output_set_transform(output, sample->transform);
 	sample_output->output = output;
 	sample_output->sample = sample;
 	wl_signal_add(&output->events.frame, &sample_output->frame);
@@ -123,12 +131,16 @@ static void new_output_notify(struct wl_listener *listener, void *data) {
 	sample_output->destroy.notify = output_remove_notify;
 	wl_list_insert(&sample->outputs, &sample_output->link);
 
+	struct wlr_output_state state;
+	wlr_output_state_init(&state);
+	wlr_output_state_set_transform(&state, sample->transform);
+	wlr_output_state_set_enabled(&state, true);
 	struct wlr_output_mode *mode = wlr_output_preferred_mode(output);
 	if (mode != NULL) {
-		wlr_output_set_mode(output, mode);
+		wlr_output_state_set_mode(&state, mode);
 	}
-
-	wlr_output_commit(output);
+	wlr_output_commit_state(output, &state);
+	wlr_output_state_finish(&state);
 }
 
 static void keyboard_key_notify(struct wl_listener *listener, void *data) {
@@ -175,7 +187,7 @@ static void new_input_notify(struct wl_listener *listener, void *data) {
 	struct sample_state *sample = wl_container_of(listener, sample, new_input);
 	switch (device->type) {
 	case WLR_INPUT_DEVICE_KEYBOARD:;
-		struct sample_keyboard *keyboard = calloc(1, sizeof(struct sample_keyboard));
+		struct sample_keyboard *keyboard = calloc(1, sizeof(*keyboard));
 		keyboard->wlr_keyboard = wlr_keyboard_from_input_device(device);
 		keyboard->sample = sample;
 		wl_signal_add(&device->events.destroy, &keyboard->destroy);
@@ -239,7 +251,7 @@ int main(int argc, char *argv[]) {
 	};
 	wl_list_init(&state.outputs);
 
-	struct wlr_backend *wlr = wlr_backend_autocreate(display);
+	struct wlr_backend *wlr = wlr_backend_autocreate(display, NULL);
 	if (!wlr) {
 		exit(1);
 	}

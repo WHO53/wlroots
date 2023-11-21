@@ -14,6 +14,7 @@ void handle_xdg_toplevel_ack_configure(
 	toplevel->pending.resizing = configure->resizing;
 	toplevel->pending.activated = configure->activated;
 	toplevel->pending.tiled = configure->tiled;
+	toplevel->pending.suspended = configure->suspended;
 
 	toplevel->pending.width = configure->width;
 	toplevel->pending.height = configure->height;
@@ -77,27 +78,26 @@ struct wlr_xdg_toplevel_configure *send_xdg_toplevel_configure(
 	if (configure->activated) {
 		states[nstates++] = XDG_TOPLEVEL_STATE_ACTIVATED;
 	}
-	if (configure->tiled) {
-		if (version >= XDG_TOPLEVEL_STATE_TILED_LEFT_SINCE_VERSION) {
-			const struct {
-				enum wlr_edges edge;
-				enum xdg_toplevel_state state;
-			} tiled[] = {
-				{ WLR_EDGE_LEFT, XDG_TOPLEVEL_STATE_TILED_LEFT },
-				{ WLR_EDGE_RIGHT, XDG_TOPLEVEL_STATE_TILED_RIGHT },
-				{ WLR_EDGE_TOP, XDG_TOPLEVEL_STATE_TILED_TOP },
-				{ WLR_EDGE_BOTTOM, XDG_TOPLEVEL_STATE_TILED_BOTTOM },
-			};
+	if (configure->tiled && version >= XDG_TOPLEVEL_STATE_TILED_LEFT_SINCE_VERSION) {
+		const struct {
+			enum wlr_edges edge;
+			enum xdg_toplevel_state state;
+		} tiled[] = {
+			{ WLR_EDGE_LEFT, XDG_TOPLEVEL_STATE_TILED_LEFT },
+			{ WLR_EDGE_RIGHT, XDG_TOPLEVEL_STATE_TILED_RIGHT },
+			{ WLR_EDGE_TOP, XDG_TOPLEVEL_STATE_TILED_TOP },
+			{ WLR_EDGE_BOTTOM, XDG_TOPLEVEL_STATE_TILED_BOTTOM },
+		};
 
-			for (size_t i = 0; i < sizeof(tiled)/sizeof(tiled[0]); ++i) {
-				if ((configure->tiled & tiled[i].edge) == 0) {
-					continue;
-				}
-				states[nstates++] = tiled[i].state;
+		for (size_t i = 0; i < sizeof(tiled)/sizeof(tiled[0]); ++i) {
+			if ((configure->tiled & tiled[i].edge) == 0) {
+				continue;
 			}
-		} else if (!configure->maximized) {
-			states[nstates++] = XDG_TOPLEVEL_STATE_MAXIMIZED;
+			states[nstates++] = tiled[i].state;
 		}
+	}
+	if (configure->suspended && version >= XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION) {
+		states[nstates++] = XDG_TOPLEVEL_STATE_SUSPENDED;
 	}
 	assert(nstates <= sizeof(states) / sizeof(states[0]));
 
@@ -116,11 +116,26 @@ struct wlr_xdg_toplevel_configure *send_xdg_toplevel_configure(
 }
 
 void handle_xdg_toplevel_committed(struct wlr_xdg_toplevel *toplevel) {
-	if (!toplevel->added) {
-		// on the first commit, send a configure request to tell the client it
+	struct wlr_xdg_toplevel_state *pending = &toplevel->pending;
+
+	// 1) Negative values are prohibited
+	// 2) If both min and max are set (aren't 0), min ≤ max
+	if (pending->min_width < 0 || pending->min_height < 0 ||
+			pending->max_width < 0 || pending->max_height < 0 ||
+			(pending->max_width != 0 && pending->max_width < pending->min_width) ||
+			(pending->max_height != 0 && pending->max_height < pending->min_height)) {
+		wl_resource_post_error(toplevel->resource,
+			XDG_TOPLEVEL_ERROR_INVALID_SIZE,
+			"client provided an invalid min or max size");
+		return;
+	}
+
+	toplevel->current = toplevel->pending;
+
+	if (toplevel->base->initial_commit) {
+		// On the initial commit, send a configure request to tell the client it
 		// is added
 		wlr_xdg_surface_schedule_configure(toplevel->base);
-		toplevel->added = true;
 
 		if (toplevel->base->client->shell->version >=
 				XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION) {
@@ -131,10 +146,7 @@ void handle_xdg_toplevel_committed(struct wlr_xdg_toplevel *toplevel) {
 				WLR_XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN |
 				WLR_XDG_TOPLEVEL_WM_CAPABILITIES_MINIMIZE);
 		}
-		return;
 	}
-
-	toplevel->current = toplevel->pending;
 }
 
 static const struct xdg_toplevel_interface xdg_toplevel_implementation;
@@ -144,6 +156,14 @@ struct wlr_xdg_toplevel *wlr_xdg_toplevel_from_resource(
 	assert(wl_resource_instance_of(resource, &xdg_toplevel_interface,
 		&xdg_toplevel_implementation));
 	return wl_resource_get_user_data(resource);
+}
+
+struct wlr_xdg_toplevel *wlr_xdg_toplevel_try_from_wlr_surface(struct wlr_surface *surface) {
+	struct wlr_xdg_surface *xdg_surface = wlr_xdg_surface_try_from_wlr_surface(surface);
+	if (xdg_surface == NULL || xdg_surface->role != WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
+		return NULL;
+	}
+	return xdg_surface->toplevel;
 }
 
 static void handle_parent_unmap(struct wl_listener *listener, void *data) {
@@ -169,10 +189,10 @@ bool wlr_xdg_toplevel_set_parent(struct wlr_xdg_toplevel *toplevel,
 		wl_list_remove(&toplevel->parent_unmap.link);
 	}
 
-	if (parent != NULL && parent->base->mapped) {
+	if (parent != NULL && parent->base->surface->mapped) {
 		toplevel->parent = parent;
 		toplevel->parent_unmap.notify = handle_parent_unmap;
-		wl_signal_add(&toplevel->parent->base->events.unmap,
+		wl_signal_add(&toplevel->parent->base->surface->events.unmap,
 			&toplevel->parent_unmap);
 	} else {
 		toplevel->parent = NULL;
@@ -247,11 +267,6 @@ static void xdg_toplevel_handle_show_window_menu(struct wl_client *client,
 		return;
 	}
 
-	if (!wlr_seat_validate_grab_serial(seat->seat, serial)) {
-		wlr_log(WLR_DEBUG, "invalid serial for grab");
-		return;
-	}
-
 	struct wlr_xdg_toplevel_show_window_menu_event event = {
 		.toplevel = toplevel,
 		.seat = seat,
@@ -278,11 +293,6 @@ static void xdg_toplevel_handle_move(struct wl_client *client,
 		return;
 	}
 
-	if (!wlr_seat_validate_grab_serial(seat->seat, serial)) {
-		wlr_log(WLR_DEBUG, "invalid serial for grab");
-		return;
-	}
-
 	struct wlr_xdg_toplevel_move_event event = {
 		.toplevel = toplevel,
 		.seat = seat,
@@ -300,7 +310,17 @@ static void xdg_toplevel_handle_resize(struct wl_client *client,
 	struct wlr_seat_client *seat =
 		wlr_seat_client_from_resource(seat_resource);
 
-	if (edges > XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT) {
+	switch (edges) {
+	case XDG_TOPLEVEL_RESIZE_EDGE_TOP:
+	case XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM:
+	case XDG_TOPLEVEL_RESIZE_EDGE_LEFT:
+	case XDG_TOPLEVEL_RESIZE_EDGE_RIGHT:
+	case XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT:
+	case XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT:
+	case XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT:
+	case XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT:
+		break;
+	default:
 		wl_resource_post_error(toplevel->base->resource,
 			XDG_TOPLEVEL_ERROR_INVALID_RESIZE_EDGE,
 			"provided value is not a valid variant of the resize_edge enum");
@@ -311,11 +331,6 @@ static void xdg_toplevel_handle_resize(struct wl_client *client,
 		wl_resource_post_error(toplevel->base->resource,
 			XDG_SURFACE_ERROR_NOT_CONSTRUCTED,
 			"surface has not been configured yet");
-		return;
-	}
-
-	if (!wlr_seat_validate_grab_serial(seat->seat, serial)) {
-		wlr_log(WLR_DEBUG, "invalid serial for grab");
 		return;
 	}
 
@@ -440,38 +455,14 @@ static const struct xdg_toplevel_interface xdg_toplevel_implementation = {
 	.set_minimized = xdg_toplevel_handle_set_minimized,
 };
 
-static void xdg_toplevel_handle_resource_destroy(struct wl_resource *resource) {
-	struct wlr_xdg_toplevel *toplevel =
-		wlr_xdg_toplevel_from_resource(resource);
-	if (toplevel == NULL) {
-		return;
-	}
-	reset_xdg_surface(toplevel->base);
-}
-
-const struct wlr_surface_role xdg_toplevel_surface_role = {
-	.name = "xdg_toplevel",
-	.commit = xdg_surface_role_commit,
-	.precommit = xdg_surface_role_precommit,
-	.destroy = xdg_surface_role_destroy,
-};
-
 void create_xdg_toplevel(struct wlr_xdg_surface *surface,
 		uint32_t id) {
-	if (!wlr_surface_set_role(surface->surface, &xdg_toplevel_surface_role,
-			surface, surface->resource, XDG_WM_BASE_ERROR_ROLE)) {
-		return;
-	}
-
-	if (surface->role != WLR_XDG_SURFACE_ROLE_NONE) {
-		wl_resource_post_error(surface->resource,
-			XDG_SURFACE_ERROR_ALREADY_CONSTRUCTED,
-			"xdg-surface has already been constructed");
+	if (!set_xdg_surface_role(surface, WLR_XDG_SURFACE_ROLE_TOPLEVEL)) {
 		return;
 	}
 
 	assert(surface->toplevel == NULL);
-	surface->toplevel = calloc(1, sizeof(struct wlr_xdg_toplevel));
+	surface->toplevel = calloc(1, sizeof(*surface->toplevel));
 	if (surface->toplevel == NULL) {
 		wl_resource_post_no_memory(surface->resource);
 		return;
@@ -498,13 +489,12 @@ void create_xdg_toplevel(struct wlr_xdg_surface *surface,
 		return;
 	}
 	wl_resource_set_implementation(surface->toplevel->resource,
-		&xdg_toplevel_implementation, surface->toplevel,
-		xdg_toplevel_handle_resource_destroy);
+		&xdg_toplevel_implementation, surface->toplevel, NULL);
 
-	surface->role = WLR_XDG_SURFACE_ROLE_TOPLEVEL;
+	set_xdg_surface_role_object(surface, surface->toplevel->resource);
 }
 
-void unmap_xdg_toplevel(struct wlr_xdg_toplevel *toplevel) {
+void reset_xdg_toplevel(struct wlr_xdg_toplevel *toplevel) {
 	if (toplevel->parent) {
 		wl_list_remove(&toplevel->parent_unmap.link);
 		toplevel->parent = NULL;
@@ -521,11 +511,19 @@ void unmap_xdg_toplevel(struct wlr_xdg_toplevel *toplevel) {
 	toplevel->requested.fullscreen = false;
 	toplevel->requested.maximized = false;
 	toplevel->requested.minimized = false;
-
-	toplevel->added = false;
 }
 
 void destroy_xdg_toplevel(struct wlr_xdg_toplevel *toplevel) {
+	wlr_surface_unmap(toplevel->base->surface);
+	reset_xdg_toplevel(toplevel);
+
+	// TODO: improve events
+	if (toplevel->base->added) {
+		wl_signal_emit_mutable(&toplevel->base->events.destroy, NULL);
+		toplevel->base->added = false;
+	}
+
+	toplevel->base->toplevel = NULL;
 	wl_resource_set_user_data(toplevel->resource, NULL);
 	free(toplevel);
 }
@@ -590,5 +588,13 @@ uint32_t wlr_xdg_toplevel_set_wm_capabilities(struct wlr_xdg_toplevel *toplevel,
 		XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION);
 	toplevel->scheduled.fields |= WLR_XDG_TOPLEVEL_CONFIGURE_WM_CAPABILITIES;
 	toplevel->scheduled.wm_capabilities = caps;
+	return wlr_xdg_surface_schedule_configure(toplevel->base);
+}
+
+uint32_t wlr_xdg_toplevel_set_suspended(struct wlr_xdg_toplevel *toplevel,
+		bool suspended) {
+	assert(toplevel->base->client->shell->version >=
+		XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION);
+	toplevel->scheduled.suspended = suspended;
 	return wlr_xdg_surface_schedule_configure(toplevel->base);
 }

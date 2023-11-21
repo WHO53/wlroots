@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include "types/wlr_xdg_shell.h"
 
-#define WM_BASE_VERSION 5
+#define WM_BASE_VERSION 6
 
 static const struct xdg_wm_base_interface xdg_shell_impl;
 
@@ -67,7 +67,7 @@ static void xdg_client_handle_resource_destroy(struct wl_resource *resource) {
 
 	struct wlr_xdg_surface *surface, *tmp = NULL;
 	wl_list_for_each_safe(surface, tmp, &client->surfaces, link) {
-		wlr_surface_destroy_role_object(surface->surface);
+		destroy_xdg_surface(surface);
 	}
 
 	if (client->ping_timer != NULL) {
@@ -93,10 +93,8 @@ static int xdg_client_ping_timeout(void *user_data) {
 static void xdg_shell_bind(struct wl_client *wl_client, void *data,
 		uint32_t version, uint32_t id) {
 	struct wlr_xdg_shell *xdg_shell = data;
-	assert(wl_client && xdg_shell);
 
-	struct wlr_xdg_client *client =
-		calloc(1, sizeof(struct wlr_xdg_client));
+	struct wlr_xdg_client *client = calloc(1, sizeof(*client));
 	if (client == NULL) {
 		wl_client_post_no_memory(wl_client);
 		return;
@@ -140,8 +138,7 @@ struct wlr_xdg_shell *wlr_xdg_shell_create(struct wl_display *display,
 		uint32_t version) {
 	assert(version <= WM_BASE_VERSION);
 
-	struct wlr_xdg_shell *xdg_shell =
-		calloc(1, sizeof(struct wlr_xdg_shell));
+	struct wlr_xdg_shell *xdg_shell = calloc(1, sizeof(*xdg_shell));
 	if (!xdg_shell) {
 		return NULL;
 	}

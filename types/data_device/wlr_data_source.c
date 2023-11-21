@@ -14,11 +14,12 @@ void wlr_data_source_init(struct wlr_data_source *source,
 		const struct wlr_data_source_impl *impl) {
 	assert(impl->send);
 
-	memset(source, 0, sizeof(*source));
-	source->impl = impl;
+	*source = (struct wlr_data_source){
+		.impl = impl,
+		.actions = -1,
+	};
 	wl_array_init(&source->mime_types);
 	wl_signal_init(&source->events.destroy);
-	source->actions = -1;
 }
 
 void wlr_data_source_send(struct wlr_data_source *source, const char *mime_type,
@@ -90,7 +91,8 @@ static void client_data_source_accept(struct wlr_data_source *wlr_source,
 static struct wlr_client_data_source *client_data_source_from_wlr_data_source(
 		struct wlr_data_source *wlr_source) {
 	assert(wlr_source->impl->accept == client_data_source_accept);
-	return (struct wlr_client_data_source *)wlr_source;
+	struct wlr_client_data_source *source = wl_container_of(wlr_source, source, source);
+	return source;
 }
 
 static void client_data_source_accept(struct wlr_data_source *wlr_source,
@@ -233,8 +235,7 @@ static void data_source_handle_resource_destroy(struct wl_resource *resource) {
 struct wlr_client_data_source *client_data_source_create(
 		struct wl_client *client, uint32_t version, uint32_t id,
 		struct wl_list *resource_list) {
-	struct wlr_client_data_source *source =
-		calloc(1, sizeof(struct wlr_client_data_source));
+	struct wlr_client_data_source *source = calloc(1, sizeof(*source));
 	if (source == NULL) {
 		return NULL;
 	}

@@ -89,7 +89,6 @@ static void input_manager_resource_destroy(struct wl_resource *resource) {
 static void inhibit_manager_bind(struct wl_client *wl_client, void *data,
 		uint32_t version, uint32_t id) {
 	struct wlr_input_inhibit_manager *manager = data;
-	assert(wl_client && manager);
 
 	struct wl_resource *wl_resource = wl_resource_create(wl_client,
 		&zwlr_input_inhibit_manager_v1_interface, version, id);
@@ -114,8 +113,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 struct wlr_input_inhibit_manager *wlr_input_inhibit_manager_create(
 		struct wl_display *display) {
 	// TODO: Client destroy
-	struct wlr_input_inhibit_manager *manager =
-		calloc(1, sizeof(struct wlr_input_inhibit_manager));
+	struct wlr_input_inhibit_manager *manager = calloc(1, sizeof(*manager));
 	if (!manager) {
 		return NULL;
 	}

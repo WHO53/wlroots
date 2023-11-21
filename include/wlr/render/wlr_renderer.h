@@ -11,32 +11,70 @@
 
 #include <stdint.h>
 #include <wayland-server-core.h>
-#include <wlr/backend.h>
+#include <wlr/render/pass.h>
 #include <wlr/render/wlr_texture.h>
+#include <wlr/util/box.h>
 
+struct wlr_backend;
 struct wlr_renderer_impl;
 struct wlr_drm_format_set;
 struct wlr_buffer;
 struct wlr_box;
 struct wlr_fbox;
 
+/**
+ * A renderer for basic 2D operations.
+ */
 struct wlr_renderer {
+	struct {
+		struct wl_signal destroy;
+		/**
+		 * Emitted when the GPU is lost, e.g. on GPU reset.
+		 *
+		 * Compositors should destroy the renderer and re-create it.
+		 */
+		struct wl_signal lost;
+	} events;
+
+	// private state
+
 	const struct wlr_renderer_impl *impl;
 
 	bool rendering;
 	bool rendering_with_buffer;
-
-	struct {
-		struct wl_signal destroy;
-	} events;
 };
 
+/**
+ * Automatically create a new renderer.
+ *
+ * Selects an appropriate renderer type to use depending on the backend,
+ * platform, environment, etc.
+ */
 struct wlr_renderer *wlr_renderer_autocreate(struct wlr_backend *backend);
 
-void wlr_renderer_begin(struct wlr_renderer *r, uint32_t width, uint32_t height);
+/**
+ * Start a render pass with the provided viewport.
+ *
+ * This should be called after wlr_output_attach_render(). Compositors must call
+ * wlr_renderer_end() when they are done.
+ *
+ * Returns false on failure, in which case compositors shouldn't try rendering.
+ */
+bool wlr_renderer_begin(struct wlr_renderer *r, uint32_t width, uint32_t height);
+/**
+ * Start a render pass on the provided struct wlr_buffer.
+ *
+ * Compositors must call wlr_renderer_end() when they are done.
+ */
 bool wlr_renderer_begin_with_buffer(struct wlr_renderer *r,
 	struct wlr_buffer *buffer);
+/**
+ * End a render pass.
+ */
 void wlr_renderer_end(struct wlr_renderer *r);
+/**
+ * Clear the viewport with the provided color.
+ */
 void wlr_renderer_clear(struct wlr_renderer *r, const float color[static 4]);
 /**
  * Defines a scissor box. Only pixels that lie within the scissor box can be
@@ -118,5 +156,22 @@ int wlr_renderer_get_drm_fd(struct wlr_renderer *r);
  * Textures must be destroyed separately.
  */
 void wlr_renderer_destroy(struct wlr_renderer *renderer);
+
+/**
+ * Allocate and initialise a new render timer.
+ */
+struct wlr_render_timer *wlr_render_timer_create(struct wlr_renderer *renderer);
+
+/**
+ * Get the render duration in nanoseconds from the timer.
+ *
+ * Returns -1 if the duration is unavailable.
+ */
+int wlr_render_timer_get_duration_ns(struct wlr_render_timer *timer);
+
+/**
+ * Destroy the render timer.
+ */
+void wlr_render_timer_destroy(struct wlr_render_timer *timer);
 
 #endif
