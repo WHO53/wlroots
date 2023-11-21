@@ -10,6 +10,6 @@ int main()
 
     wlr_log_init(WLR_DEBUG, NULL);
     wld = wl_display_create();
-    assert(wlr_backend_autocreate(wld));
+    assert(wlr_backend_autocreate(wld, NULL));
     return 0;
 }
