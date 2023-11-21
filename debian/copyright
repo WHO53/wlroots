@@ -80,15 +80,6 @@ Files: protocol/wlr-screencopy-unstable-v1.xml
 Copyright: 2018 Simon Ser
 License: Expat
 
-Files: examples/screencopy.c
-Copyright: 2008 Kristian Høgsberg
-License: Expat
-
-Files: examples/screencopy-dmabuf.c
-Copyright: 2008 Kristian Høgsberg
- 2020 Andri Yngvason
-License: Expat
-
 License: Expat
  Permission is hereby granted, free of charge, to any person obtaining a copy of
  this software and associated documentation files (the "Software"), to deal in
@@ -233,8 +224,7 @@ License: CC0-1.0
      party to this document and has no duty or obligation with respect to
      this CC0 or use of the Work.
 
-Files: protocol/idle.xml
- protocol/server-decoration.xml
+Files: protocol/server-decoration.xml
 Copyright: 2015 Martin Gräßlin
 License: LGPL-2.1+
  This program is free software: you can redistribute it and/or modify
