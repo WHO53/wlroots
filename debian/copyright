@@ -3,7 +3,8 @@ Upstream-Name: wlroots
 Source: https://gitlab.freedesktop.org/wlroots/wlroots/
 
 Files: *
-Copyright: 2017-2019, Drew DeVault
+Copyright: 2023 The wlroots contributors
+  2017-2019, Drew DeVault
   2014, Jari Vetoniemi
 License: Expat
 
