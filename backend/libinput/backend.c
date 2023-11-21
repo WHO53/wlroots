@@ -11,7 +11,8 @@
 static struct wlr_libinput_backend *get_libinput_backend_from_backend(
 		struct wlr_backend *wlr_backend) {
 	assert(wlr_backend_is_libinput(wlr_backend));
-	return (struct wlr_libinput_backend *)wlr_backend;
+	struct wlr_libinput_backend *backend = wl_container_of(wlr_backend, backend, backend);
+	return backend;
 }
 
 static int libinput_open_restricted(const char *path,
@@ -193,8 +194,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 
 struct wlr_backend *wlr_libinput_backend_create(struct wl_display *display,
 		struct wlr_session *session) {
-	struct wlr_libinput_backend *backend =
-		calloc(1, sizeof(struct wlr_libinput_backend));
+	struct wlr_libinput_backend *backend = calloc(1, sizeof(*backend));
 	if (!backend) {
 		wlr_log(WLR_ERROR, "Allocation failed: %s", strerror(errno));
 		return NULL;

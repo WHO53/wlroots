@@ -1,16 +1,17 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <drm_fourcc.h>
+#include <wlr/interfaces/wlr_output.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_matrix.h>
-#include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_screencopy_v1.h>
 #include <wlr/backend.h>
 #include <wlr/util/box.h>
 #include <wlr/util/log.h>
 #include "wlr-screencopy-unstable-v1-protocol.h"
 #include "render/pixel_format.h"
+#include "render/wlr_renderer.h"
 
 #define SCREENCOPY_MANAGER_VERSION 3
 
@@ -45,8 +46,7 @@ static void screencopy_damage_accumulate(struct screencopy_damage *damage,
 
 	if (state->committed & WLR_OUTPUT_STATE_DAMAGE) {
 		// If the compositor submitted damage, copy it over
-		pixman_region32_union(region, region,
-			(pixman_region32_t *) &state->damage);
+		pixman_region32_union(region, region, &state->damage);
 		pixman_region32_intersect_rect(region, region, 0, 0,
 			output->width, output->height);
 	} else if (state->committed & WLR_OUTPUT_STATE_BUFFER) {
@@ -83,8 +83,7 @@ static void screencopy_damage_handle_output_destroy(
 static struct screencopy_damage *screencopy_damage_create(
 		struct wlr_screencopy_v1_client *client,
 		struct wlr_output *output) {
-	struct screencopy_damage *damage =
-		calloc(1, sizeof(struct screencopy_damage));
+	struct screencopy_damage *damage = calloc(1, sizeof(*damage));
 	if (!damage) {
 		return NULL;
 	}
@@ -197,8 +196,8 @@ static bool frame_shm_copy(struct wlr_screencopy_frame_v1 *frame,
 
 	int x = frame->box.x;
 	int y = frame->box.y;
-	int width = frame->buffer->width;
-	int height = frame->buffer->height;
+	int width = frame->box.width;
+	int height = frame->box.height;
 
 	void *data;
 	uint32_t format;
@@ -209,12 +208,12 @@ static bool frame_shm_copy(struct wlr_screencopy_frame_v1 *frame,
 	}
 
 	bool ok = false;
-	if (!wlr_renderer_begin_with_buffer(renderer, src_buffer)) {
+	if (!renderer_bind_buffer(renderer, src_buffer)) {
 		goto out;
 	}
 	ok = wlr_renderer_read_pixels(renderer, format,
 		stride, width, height, x, y, 0, 0, data);
-	wlr_renderer_end(renderer);
+	renderer_bind_buffer(renderer, NULL);
 
 out:
 	wlr_buffer_end_data_ptr_access(frame->buffer);
@@ -228,12 +227,6 @@ static bool frame_dma_copy(struct wlr_screencopy_frame_v1 *frame,
 	struct wlr_renderer *renderer = output->renderer;
 	assert(renderer);
 
-	// TODO: add support for copying regions with DMA-BUFs
-	if (frame->box.x != 0 || frame->box.y != 0 ||
-			src_buffer->width != frame->box.width ||
-			src_buffer->height != frame->box.height) {
-		return false;
-	}
 
 	struct wlr_texture *src_tex =
 		wlr_texture_from_buffer(renderer, src_buffer);
@@ -241,20 +234,30 @@ static bool frame_dma_copy(struct wlr_screencopy_frame_v1 *frame,
 		return false;
 	}
 
-	float mat[9];
-	wlr_matrix_identity(mat);
-	wlr_matrix_scale(mat, dst_buffer->width, dst_buffer->height);
-
 	bool ok = false;
-	if (!wlr_renderer_begin_with_buffer(renderer, dst_buffer)) {
+
+	struct wlr_render_pass *pass =
+		wlr_renderer_begin_buffer_pass(renderer, dst_buffer, NULL);
+	if (!pass) {
 		goto out;
 	}
 
-	wlr_renderer_clear(renderer, (float[]){ 0.0, 0.0, 0.0, 0.0 });
-	wlr_render_texture_with_matrix(renderer, src_tex, mat, 1.0f);
+	wlr_render_pass_add_texture(pass, &(struct wlr_render_texture_options) {
+		.texture = src_tex,
+		.blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+		.dst_box = (struct wlr_box){
+			.width = dst_buffer->width,
+			.height = dst_buffer->height,
+		},
+		.src_box = (struct wlr_fbox){
+			.x = frame->box.x,
+			.y = frame->box.y,
+			.width = frame->box.width,
+			.height = frame->box.height,
+		},
+	});
 
-	ok = true;
-	wlr_renderer_end(renderer);
+	ok = wlr_render_pass_submit(pass);
 
 out:
 	wlr_texture_destroy(src_tex);
@@ -268,10 +271,9 @@ static void frame_handle_output_commit(struct wl_listener *listener,
 	struct wlr_output_event_commit *event = data;
 	struct wlr_output *output = frame->output;
 	struct wlr_renderer *renderer = output->renderer;
-	struct wlr_buffer *buffer = event->buffer;
 	assert(renderer);
 
-	if (!(event->committed & WLR_OUTPUT_STATE_BUFFER)) {
+	if (!(event->state->committed & WLR_OUTPUT_STATE_BUFFER)) {
 		return;
 	}
 
@@ -290,26 +292,36 @@ static void frame_handle_output_commit(struct wl_listener *listener,
 	wl_list_remove(&frame->output_commit.link);
 	wl_list_init(&frame->output_commit.link);
 
-	bool ok;
+	struct wlr_buffer *src_buffer = event->state->buffer;
+	if (frame->box.x < 0 || frame->box.y < 0 ||
+			frame->box.x + frame->box.width > src_buffer->width ||
+			frame->box.y + frame->box.height > src_buffer->height) {
+		goto err;
+	}
+
 	switch (frame->buffer_cap) {
 	case WLR_BUFFER_CAP_DMABUF:
-		ok = frame_dma_copy(frame, buffer);
+		if (!frame_dma_copy(frame, src_buffer)) {
+			goto err;
+		}
 		break;
 	case WLR_BUFFER_CAP_DATA_PTR:
-		ok = frame_shm_copy(frame, buffer);
+		if (!frame_shm_copy(frame, src_buffer)) {
+			goto err;
+		}
 		break;
 	default:
 		abort(); // unreachable
-	}
-	if (!ok) {
-		zwlr_screencopy_frame_v1_send_failed(frame->resource);
-		frame_destroy(frame);
-		return;
 	}
 
 	zwlr_screencopy_frame_v1_send_flags(frame->resource, 0);
 	frame_send_damage(frame);
 	frame_send_ready(frame, event->when);
+	frame_destroy(frame);
+	return;
+
+err:
+	zwlr_screencopy_frame_v1_send_failed(frame->resource);
 	frame_destroy(frame);
 }
 
@@ -347,7 +359,7 @@ static void frame_handle_copy(struct wl_client *wl_client,
 		return;
 	}
 
-	struct wlr_buffer *buffer = wlr_buffer_from_resource(buffer_resource);
+	struct wlr_buffer *buffer = wlr_buffer_try_from_resource(buffer_resource);
 	if (buffer == NULL) {
 		wl_resource_post_error(frame->resource,
 			ZWLR_SCREENCOPY_FRAME_V1_ERROR_INVALID_BUFFER,
@@ -417,8 +429,10 @@ static void frame_handle_copy(struct wl_client *wl_client,
 	wl_signal_add(&output->events.destroy, &frame->output_enable);
 	frame->output_enable.notify = frame_handle_output_enable;
 
-	// Schedule a buffer commit
-	wlr_output_schedule_frame(output);
+	// Request a frame because we can't assume that the current front buffer is still usable. It may
+	// have been released already, and we shouldn't lock it here because compositors want to render
+	// into the least damaged buffer.
+	wlr_output_update_needs_frame(output);
 
 	wlr_output_lock_attach_render(output, true);
 	if (frame->overlay_cursor) {
@@ -468,8 +482,7 @@ static void capture_output(struct wl_client *wl_client,
 		struct wlr_screencopy_v1_client *client, uint32_t version,
 		uint32_t id, int32_t overlay_cursor, struct wlr_output *output,
 		const struct wlr_box *box) {
-	struct wlr_screencopy_frame_v1 *frame =
-		calloc(1, sizeof(struct wlr_screencopy_frame_v1));
+	struct wlr_screencopy_frame_v1 *frame = calloc(1, sizeof(*frame));
 	if (frame == NULL) {
 		wl_client_post_no_memory(wl_client);
 		return;
@@ -543,7 +556,8 @@ static void capture_output(struct wl_client *wl_client,
 
 		buffer_box = *box;
 
-		wlr_box_transform(&buffer_box, &buffer_box, output->transform, ow, oh);
+		wlr_box_transform(&buffer_box, &buffer_box,
+			wlr_output_transform_invert(output->transform), ow, oh);
 		buffer_box.x *= output->scale;
 		buffer_box.y *= output->scale;
 		buffer_box.width *= output->scale;
@@ -551,7 +565,7 @@ static void capture_output(struct wl_client *wl_client,
 	}
 
 	frame->box = buffer_box;
-	frame->shm_stride = (shm_info->bpp / 8) * buffer_box.width;
+	frame->shm_stride = pixel_format_info_min_stride(shm_info, buffer_box.width);
 
 	zwlr_screencopy_frame_v1_send_buffer(frame->resource,
 		convert_drm_format_to_wl_shm(frame->shm_format),
@@ -626,8 +640,7 @@ static void manager_bind(struct wl_client *wl_client, void *data,
 		uint32_t version, uint32_t id) {
 	struct wlr_screencopy_manager_v1 *manager = data;
 
-	struct wlr_screencopy_v1_client *client =
-		calloc(1, sizeof(struct wlr_screencopy_v1_client));
+	struct wlr_screencopy_v1_client *client = calloc(1, sizeof(*client));
 	if (client == NULL) {
 		goto failure;
 	}
@@ -662,8 +675,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 
 struct wlr_screencopy_manager_v1 *wlr_screencopy_manager_v1_create(
 		struct wl_display *display) {
-	struct wlr_screencopy_manager_v1 *manager =
-		calloc(1, sizeof(struct wlr_screencopy_manager_v1));
+	struct wlr_screencopy_manager_v1 *manager = calloc(1, sizeof(*manager));
 	if (manager == NULL) {
 		return NULL;
 	}

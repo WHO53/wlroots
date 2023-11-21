@@ -120,7 +120,8 @@ static const struct wlr_data_source_impl client_source_impl;
 static struct client_data_source *
 		client_data_source_from_source(struct wlr_data_source *wlr_source) {
 	assert(wlr_source->impl == &client_source_impl);
-	return (struct client_data_source *)wlr_source;
+	struct client_data_source *source = wl_container_of(wlr_source, source, source);
+	return source;
 }
 
 static void client_source_send(struct wlr_data_source *wlr_source,
@@ -166,7 +167,8 @@ static struct client_primary_selection_source *
 		client_primary_selection_source_from_source(
 			struct wlr_primary_selection_source *wlr_source) {
 	assert(wlr_source->impl == &client_primary_selection_source_impl);
-	return (struct client_primary_selection_source *)wlr_source;
+	struct client_primary_selection_source *source = wl_container_of(wlr_source, source, source);
+	return source;
 }
 
 static void client_primary_selection_source_send(
@@ -286,7 +288,7 @@ static struct wl_resource *create_offer(struct wlr_data_control_device_v1 *devic
 		struct wl_array *mime_types, bool is_primary) {
 	struct wl_client *client = wl_resource_get_client(device->resource);
 
-	struct data_offer *offer = calloc(1, sizeof(struct data_offer));
+	struct data_offer *offer = calloc(1, sizeof(*offer));
 	if (offer == NULL) {
 		wl_client_post_no_memory(client);
 		return NULL;
@@ -359,8 +361,7 @@ static void control_handle_set_selection(struct wl_client *client,
 		return;
 	}
 
-	struct client_data_source *client_source =
-		calloc(1, sizeof(struct client_data_source));
+	struct client_data_source *client_source = calloc(1, sizeof(*client_source));
 	if (client_source == NULL) {
 		wl_client_post_no_memory(client);
 		return;
@@ -412,8 +413,7 @@ static void control_handle_set_primary_selection(struct wl_client *client,
 		return;
 	}
 
-	struct client_primary_selection_source *client_source =
-		calloc(1, sizeof(struct client_primary_selection_source));
+	struct client_primary_selection_source *client_source = calloc(1, sizeof(*client_source));
 	if (client_source == NULL) {
 		wl_client_post_no_memory(client);
 		return;
@@ -563,8 +563,7 @@ static struct wlr_data_control_manager_v1 *manager_from_resource(
 
 static void manager_handle_create_data_source(struct wl_client *client,
 		struct wl_resource *manager_resource, uint32_t id) {
-	struct data_control_source *source =
-		calloc(1, sizeof(struct data_control_source));
+	struct data_control_source *source = calloc(1, sizeof(*source));
 	if (source == NULL) {
 		wl_resource_post_no_memory(manager_resource);
 		return;
@@ -593,26 +592,28 @@ static void manager_handle_get_data_device(struct wl_client *client,
 	struct wlr_seat_client *seat_client =
 		wlr_seat_client_from_resource(seat_resource);
 
-	struct wlr_data_control_device_v1 *device =
-		calloc(1, sizeof(struct wlr_data_control_device_v1));
+	uint32_t version = wl_resource_get_version(manager_resource);
+	struct wl_resource *resource = wl_resource_create(client,
+		&zwlr_data_control_device_v1_interface, version, id);
+	if (resource == NULL) {
+		wl_resource_post_no_memory(manager_resource);
+		return;
+	}
+	wl_resource_set_implementation(resource, &control_impl, NULL,
+		control_handle_resource_destroy);
+	if (seat_client == NULL) {
+		return;
+	}
+
+	struct wlr_data_control_device_v1 *device = calloc(1, sizeof(*device));
 	if (device == NULL) {
 		wl_resource_post_no_memory(manager_resource);
 		return;
 	}
 	device->manager = manager;
 	device->seat = seat_client->seat;
-
-	uint32_t version = wl_resource_get_version(manager_resource);
-	device->resource = wl_resource_create(client,
-		&zwlr_data_control_device_v1_interface, version, id);
-	if (device->resource == NULL) {
-		wl_resource_post_no_memory(manager_resource);
-		free(device);
-		return;
-	}
-	wl_resource_set_implementation(device->resource, &control_impl, device,
-		control_handle_resource_destroy);
-	struct wl_resource *resource = device->resource;
+	device->resource = resource;
+	wl_resource_set_user_data(resource, device);
 
 	device->seat_destroy.notify = control_handle_seat_destroy;
 	wl_signal_add(&device->seat->events.destroy, &device->seat_destroy);
@@ -673,8 +674,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 
 struct wlr_data_control_manager_v1 *wlr_data_control_manager_v1_create(
 		struct wl_display *display) {
-	struct wlr_data_control_manager_v1 *manager =
-		calloc(1, sizeof(struct wlr_data_control_manager_v1));
+	struct wlr_data_control_manager_v1 *manager = calloc(1, sizeof(*manager));
 	if (manager == NULL) {
 		return NULL;
 	}

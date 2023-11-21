@@ -103,14 +103,14 @@ struct client_data_source {
 static void client_source_send(
 		struct wlr_primary_selection_source *wlr_source,
 		const char *mime_type, int fd) {
-	struct client_data_source *source = (struct client_data_source *)wlr_source;
+	struct client_data_source *source = wl_container_of(wlr_source, source, source);
 	zwp_primary_selection_source_v1_send_send(source->resource, mime_type, fd);
 	close(fd);
 }
 
 static void client_source_destroy(
 		struct wlr_primary_selection_source *wlr_source) {
-	struct client_data_source *source = (struct client_data_source *)wlr_source;
+	struct client_data_source *source = wl_container_of(wlr_source, source, source);
 	zwp_primary_selection_source_v1_send_cancelled(source->resource);
 	// Make the source resource inert
 	wl_resource_set_user_data(source->resource, NULL);
@@ -306,7 +306,7 @@ static struct wlr_primary_selection_v1_device *get_or_create_device(
 		}
 	}
 
-	device = calloc(1, sizeof(struct wlr_primary_selection_v1_device));
+	device = calloc(1, sizeof(*device));
 	if (device == NULL) {
 		return NULL;
 	}
@@ -369,8 +369,7 @@ static struct wlr_primary_selection_v1_device_manager *manager_from_resource(
 
 static void device_manager_handle_create_source(struct wl_client *client,
 		struct wl_resource *manager_resource, uint32_t id) {
-	struct client_data_source *source =
-		calloc(1, sizeof(struct client_data_source));
+	struct client_data_source *source = calloc(1, sizeof(*source));
 	if (source == NULL) {
 		wl_client_post_no_memory(client);
 		return;
@@ -397,13 +396,6 @@ static void device_manager_handle_get_device(struct wl_client *client,
 	struct wlr_primary_selection_v1_device_manager *manager =
 		manager_from_resource(manager_resource);
 
-	struct wlr_primary_selection_v1_device *device =
-		get_or_create_device(manager, seat_client->seat);
-	if (device == NULL) {
-		wl_resource_post_no_memory(manager_resource);
-		return;
-	}
-
 	uint32_t version = wl_resource_get_version(manager_resource);
 	struct wl_resource *resource = wl_resource_create(client,
 		&zwp_primary_selection_device_v1_interface, version, id);
@@ -411,8 +403,21 @@ static void device_manager_handle_get_device(struct wl_client *client,
 		wl_resource_post_no_memory(manager_resource);
 		return;
 	}
-	wl_resource_set_implementation(resource, &device_impl, device,
+	wl_resource_set_implementation(resource, &device_impl, NULL,
 		device_handle_resource_destroy);
+	wl_list_init(wl_resource_get_link(resource));
+	if (seat_client == NULL) {
+		return;
+	}
+
+	struct wlr_primary_selection_v1_device *device =
+		get_or_create_device(manager, seat_client->seat);
+	if (device == NULL) {
+		wl_resource_destroy(resource);
+		wl_resource_post_no_memory(manager_resource);
+		return;
+	}
+	wl_resource_set_user_data(resource, device);
 	wl_list_insert(&device->resources, wl_resource_get_link(resource));
 
 	if (device->seat->keyboard_state.focused_client == seat_client) {
@@ -466,8 +471,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 struct wlr_primary_selection_v1_device_manager *
 		wlr_primary_selection_v1_device_manager_create(
 		struct wl_display *display) {
-	struct wlr_primary_selection_v1_device_manager *manager =
-		calloc(1, sizeof(struct wlr_primary_selection_v1_device_manager));
+	struct wlr_primary_selection_v1_device_manager *manager = calloc(1, sizeof(*manager));
 	if (manager == NULL) {
 		return NULL;
 	}

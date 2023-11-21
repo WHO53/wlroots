@@ -20,7 +20,41 @@ bool wlr_renderer_is_pixman(struct wlr_renderer *wlr_renderer) {
 static struct wlr_pixman_renderer *get_renderer(
 		struct wlr_renderer *wlr_renderer) {
 	assert(wlr_renderer_is_pixman(wlr_renderer));
-	return (struct wlr_pixman_renderer *)wlr_renderer;
+	struct wlr_pixman_renderer *renderer = wl_container_of(wlr_renderer, renderer, wlr_renderer);
+	return renderer;
+}
+
+bool begin_pixman_data_ptr_access(struct wlr_buffer *wlr_buffer, pixman_image_t **image_ptr,
+		uint32_t flags) {
+	pixman_image_t *image = *image_ptr;
+
+	void *data = NULL;
+	uint32_t drm_format;
+	size_t stride;
+	if (!wlr_buffer_begin_data_ptr_access(wlr_buffer, flags,
+			&data, &drm_format, &stride)) {
+		return false;
+	}
+
+	// If the data pointer has changed, re-create the Pixman image. This can
+	// happen if it's a client buffer and the wl_shm_pool has been resized.
+	if (data != pixman_image_get_data(image)) {
+		pixman_format_code_t format = get_pixman_format_from_drm(drm_format);
+		assert(format != 0);
+
+		pixman_image_t *new_image = pixman_image_create_bits_no_clear(format,
+			wlr_buffer->width, wlr_buffer->height, data, stride);
+		if (image == NULL) {
+			wlr_buffer_end_data_ptr_access(wlr_buffer);
+			return false;
+		}
+
+		pixman_image_unref(image);
+		image = new_image;
+	}
+
+	*image_ptr = image;
+	return true;
 }
 
 static struct wlr_pixman_buffer *get_buffer(
@@ -43,7 +77,8 @@ bool wlr_texture_is_pixman(struct wlr_texture *texture) {
 static struct wlr_pixman_texture *get_texture(
 		struct wlr_texture *wlr_texture) {
 	assert(wlr_texture_is_pixman(wlr_texture));
-	return (struct wlr_pixman_texture *)wlr_texture;
+	struct wlr_pixman_texture *texture = wl_container_of(wlr_texture, texture, wlr_texture);
+	return texture;
 }
 
 static void texture_destroy(struct wlr_texture *wlr_texture) {
@@ -58,9 +93,6 @@ static void texture_destroy(struct wlr_texture *wlr_texture) {
 static const struct wlr_texture_impl texture_impl = {
 	.destroy = texture_destroy,
 };
-
-struct wlr_pixman_texture *pixman_create_texture(
-		struct wlr_texture *wlr_texture, struct wlr_pixman_renderer *renderer);
 
 static void destroy_buffer(struct wlr_pixman_buffer *buffer) {
 	wl_list_remove(&buffer->link);
@@ -127,7 +159,7 @@ error_buffer:
 	return NULL;
 }
 
-static void pixman_begin(struct wlr_renderer *wlr_renderer, uint32_t width,
+static bool pixman_begin(struct wlr_renderer *wlr_renderer, uint32_t width,
 		uint32_t height) {
 	struct wlr_pixman_renderer *renderer = get_renderer(wlr_renderer);
 	renderer->width = width;
@@ -136,23 +168,8 @@ static void pixman_begin(struct wlr_renderer *wlr_renderer, uint32_t width,
 	struct wlr_pixman_buffer *buffer = renderer->current_buffer;
 	assert(buffer != NULL);
 
-	void *data = NULL;
-	uint32_t drm_format;
-	size_t stride;
-	wlr_buffer_begin_data_ptr_access(buffer->buffer,
-		WLR_BUFFER_DATA_PTR_ACCESS_READ | WLR_BUFFER_DATA_PTR_ACCESS_WRITE,
-		&data, &drm_format, &stride);
-
-	// If the data pointer has changed, re-create the Pixman image. This can
-	// happen if it's a client buffer and the wl_shm_pool has been resized.
-	if (data != pixman_image_get_data(buffer->image)) {
-		pixman_format_code_t format = get_pixman_format_from_drm(drm_format);
-		assert(format != 0);
-
-		pixman_image_unref(buffer->image);
-		buffer->image = pixman_image_create_bits_no_clear(format,
-			buffer->buffer->width, buffer->buffer->height, data, stride);
-	}
+	return begin_pixman_data_ptr_access(buffer->buffer, &buffer->image,
+		WLR_BUFFER_DATA_PTR_ACCESS_READ | WLR_BUFFER_DATA_PTR_ACCESS_WRITE);
 }
 
 static void pixman_end(struct wlr_renderer *wlr_renderer) {
@@ -223,32 +240,17 @@ static bool pixman_render_subtexture_with_matrix(
 	struct wlr_pixman_texture *texture = get_texture(wlr_texture);
 	struct wlr_pixman_buffer *buffer = renderer->current_buffer;
 
-	if (texture->buffer != NULL) {
-		void *data;
-		uint32_t drm_format;
-		size_t stride;
-		if (!wlr_buffer_begin_data_ptr_access(texture->buffer,
-				WLR_BUFFER_DATA_PTR_ACCESS_READ, &data, &drm_format, &stride)) {
-			return false;
-		}
-
-		// If the data pointer has changed, re-create the Pixman image. This can
-		// happen if it's a client buffer and the wl_shm_pool has been resized.
-		if (data != pixman_image_get_data(texture->image)) {
-			pixman_format_code_t format = get_pixman_format_from_drm(drm_format);
-			assert(format != 0);
-
-			pixman_image_unref(texture->image);
-			texture->image = pixman_image_create_bits_no_clear(format,
-				texture->wlr_texture.width, texture->wlr_texture.height,
-				data, stride);
-		}
+	if (texture->buffer != NULL && !begin_pixman_data_ptr_access(texture->buffer,
+			&texture->image, WLR_BUFFER_DATA_PTR_ACCESS_READ)) {
+		return false;
 	}
 
-	// TODO: don't create a mask if alpha == 1.0
-	struct pixman_color mask_colour = {0};
-	mask_colour.alpha = 0xFFFF * alpha;
-	pixman_image_t *mask = pixman_image_create_solid_fill(&mask_colour);
+	pixman_image_t *mask = NULL;
+	if (alpha != 1.0) {
+		struct pixman_color mask_colour = {0};
+		mask_colour.alpha = 0xFFFF * alpha;
+		mask = pixman_image_create_solid_fill(&mask_colour);
+	}
 
 	float m[9];
 	memcpy(m, matrix, sizeof(m));
@@ -269,7 +271,9 @@ static bool pixman_render_subtexture_with_matrix(
 		wlr_buffer_end_data_ptr_access(texture->buffer);
 	}
 
-	pixman_image_unref(mask);
+	if (mask != NULL) {
+		pixman_image_unref(mask);
+	}
 
 	return true;
 }
@@ -337,15 +341,14 @@ static const struct wlr_drm_format_set *pixman_get_render_formats(
 static struct wlr_pixman_texture *pixman_texture_create(
 		struct wlr_pixman_renderer *renderer, uint32_t drm_format,
 		uint32_t width, uint32_t height) {
-	struct wlr_pixman_texture *texture =
-		calloc(1, sizeof(struct wlr_pixman_texture));
+	struct wlr_pixman_texture *texture = calloc(1, sizeof(*texture));
 	if (texture == NULL) {
 		wlr_log_errno(WLR_ERROR, "Failed to allocate pixman texture");
 		return NULL;
 	}
 
-	wlr_texture_init(&texture->wlr_texture, &texture_impl, width, height);
-	texture->renderer = renderer;
+	wlr_texture_init(&texture->wlr_texture, &renderer->wlr_renderer,
+		&texture_impl, width, height);
 
 	texture->format_info = drm_get_pixel_format_info(drm_format);
 	if (!texture->format_info) {
@@ -488,6 +491,25 @@ static uint32_t pixman_get_render_buffer_caps(struct wlr_renderer *renderer) {
 	return WLR_BUFFER_CAP_DATA_PTR;
 }
 
+static struct wlr_render_pass *pixman_begin_buffer_pass(struct wlr_renderer *wlr_renderer,
+		struct wlr_buffer *wlr_buffer, const struct wlr_buffer_pass_options *options) {
+	struct wlr_pixman_renderer *renderer = get_renderer(wlr_renderer);
+
+	struct wlr_pixman_buffer *buffer = get_buffer(renderer, wlr_buffer);
+	if (buffer == NULL) {
+		buffer = create_buffer(renderer, wlr_buffer);
+	}
+	if (buffer == NULL) {
+		return NULL;
+	}
+
+	struct wlr_pixman_render_pass *pass = begin_pixman_render_pass(buffer);
+	if (pass == NULL) {
+		return NULL;
+	}
+	return &pass->base;
+}
+
 static const struct wlr_renderer_impl renderer_impl = {
 	.begin = pixman_begin,
 	.end = pixman_end,
@@ -503,11 +525,11 @@ static const struct wlr_renderer_impl renderer_impl = {
 	.preferred_read_format = pixman_preferred_read_format,
 	.read_pixels = pixman_read_pixels,
 	.get_render_buffer_caps = pixman_get_render_buffer_caps,
+	.begin_buffer_pass = pixman_begin_buffer_pass,
 };
 
 struct wlr_renderer *wlr_pixman_renderer_create(void) {
-	struct wlr_pixman_renderer *renderer =
-		calloc(1, sizeof(struct wlr_pixman_renderer));
+	struct wlr_pixman_renderer *renderer = calloc(1, sizeof(*renderer));
 	if (renderer == NULL) {
 		return NULL;
 	}

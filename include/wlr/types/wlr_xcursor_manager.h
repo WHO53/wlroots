@@ -10,7 +10,6 @@
 #define WLR_TYPES_WLR_XCURSOR_MANAGER_H
 
 #include <wayland-server-core.h>
-#include <wlr/types/wlr_cursor.h>
 #include <wlr/xcursor.h>
 
 /**
@@ -31,7 +30,7 @@ struct wlr_xcursor_manager_theme {
 struct wlr_xcursor_manager {
 	char *name;
 	uint32_t size;
-	struct wl_list scaled_themes; // wlr_xcursor_manager_theme::link
+	struct wl_list scaled_themes; // wlr_xcursor_manager_theme.link
 };
 
 /**
@@ -56,14 +55,5 @@ bool wlr_xcursor_manager_load(struct wlr_xcursor_manager *manager,
  */
 struct wlr_xcursor *wlr_xcursor_manager_get_xcursor(
 	struct wlr_xcursor_manager *manager, const char *name, float scale);
-
-/**
- * Set a struct wlr_cursor's cursor image to the specified cursor name for all
- * scale factors. struct wlr_cursor will take over from this point and ensure
- * the correct cursor is used on each output, assuming a
- * struct wlr_output_layout is attached to it.
- */
-void wlr_xcursor_manager_set_cursor_image(struct wlr_xcursor_manager *manager,
-	const char *name, struct wlr_cursor *cursor);
 
 #endif

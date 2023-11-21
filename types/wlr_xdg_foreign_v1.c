@@ -29,13 +29,7 @@ static void xdg_imported_handle_destroy(struct wl_client *client,
 
 static struct wlr_xdg_toplevel *verify_is_toplevel(struct wl_resource *resource,
 		struct wlr_surface *surface) {
-	if (!wlr_surface_is_xdg_surface(surface)) {
-		wl_resource_post_error(resource, -1, "surface must be an xdg_surface");
-		return NULL;
-	}
-
-	struct wlr_xdg_surface *xdg_surface =
-		wlr_xdg_surface_from_wlr_surface(surface);
+	struct wlr_xdg_surface *xdg_surface = wlr_xdg_surface_try_from_wlr_surface(surface);
 	if (xdg_surface == NULL || xdg_surface->role != WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
 		wl_resource_post_error(resource, -1, "surface must be an xdg_toplevel");
 		return NULL;
@@ -84,9 +78,9 @@ static void xdg_imported_handle_set_parent_of(struct wl_client *client,
 	}
 
 	struct wlr_xdg_surface *surface =
-		wlr_xdg_surface_from_wlr_surface(wlr_surface);
+		wlr_xdg_surface_try_from_wlr_surface(wlr_surface);
 
-	if (!surface->mapped) {
+	if (!surface->surface->mapped) {
 		wlr_xdg_toplevel_set_parent(child_toplevel, NULL);
 		return;
 	}
@@ -98,7 +92,7 @@ static void xdg_imported_handle_set_parent_of(struct wl_client *client,
 		}
 	}
 
-	child = calloc(1, sizeof(struct wlr_xdg_imported_child_v1));
+	child = calloc(1, sizeof(*child));
 	if (child == NULL) {
 		wl_client_post_no_memory(client);
 		return;
@@ -162,7 +156,8 @@ static void destroy_imported(struct wlr_xdg_imported_v1 *imported) {
 	struct wlr_xdg_imported_child_v1 *child, *child_tmp;
 	wl_list_for_each_safe(child, child_tmp, &imported->children, link) {
 		struct wlr_xdg_surface *xdg_child =
-			wlr_xdg_surface_from_wlr_surface(child->surface);
+			wlr_xdg_surface_try_from_wlr_surface(child->surface);
+		assert(xdg_child != NULL);
 		wlr_xdg_toplevel_set_parent(xdg_child->toplevel, NULL);
 	}
 
@@ -216,8 +211,7 @@ static void xdg_exporter_handle_export(struct wl_client *wl_client,
 		return;
 	}
 
-	struct wlr_xdg_exported_v1 *exported =
-		calloc(1, sizeof(struct wlr_xdg_exported_v1));
+	struct wlr_xdg_exported_v1 *exported = calloc(1, sizeof(*exported));
 	if (exported == NULL) {
 		wl_client_post_no_memory(wl_client);
 		return;
@@ -307,8 +301,7 @@ static void xdg_importer_handle_import(struct wl_client *wl_client,
 	struct wlr_xdg_foreign_v1 *foreign =
 		xdg_foreign_from_importer_resource(client_resource);
 
-	struct wlr_xdg_imported_v1 *imported =
-		calloc(1, sizeof(struct wlr_xdg_imported_v1));
+	struct wlr_xdg_imported_v1 *imported = calloc(1, sizeof(*imported));
 	if (imported == NULL) {
 		wl_client_post_no_memory(wl_client);
 		return;
@@ -391,8 +384,7 @@ static void handle_foreign_registry_destroy(struct wl_listener *listener,
 
 struct wlr_xdg_foreign_v1 *wlr_xdg_foreign_v1_create(
 		struct wl_display *display, struct wlr_xdg_foreign_registry *registry) {
-	struct wlr_xdg_foreign_v1 *foreign = calloc(1,
-			sizeof(struct wlr_xdg_foreign_v1));
+	struct wlr_xdg_foreign_v1 *foreign = calloc(1, sizeof(*foreign));
 	if (!foreign) {
 		return NULL;
 	}

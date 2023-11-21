@@ -72,7 +72,7 @@ static void pointer_constraint_set_region(
 	pixman_region32_clear(&constraint->pending.region);
 
 	if (region_resource) {
-		pixman_region32_t *region = wlr_region_from_resource(region_resource);
+		const pixman_region32_t *region = wlr_region_from_resource(region_resource);
 		pixman_region32_copy(&constraint->pending.region, region);
 	}
 
@@ -276,7 +276,6 @@ static const struct zwp_pointer_constraints_v1_interface
 static void pointer_constraints_bind(struct wl_client *client, void *data,
 		uint32_t version, uint32_t id) {
 	struct wlr_pointer_constraints_v1 *pointer_constraints = data;
-	assert(client && pointer_constraints);
 
 	struct wl_resource *resource = wl_resource_create(client,
 		&zwp_pointer_constraints_v1_interface, version, id);

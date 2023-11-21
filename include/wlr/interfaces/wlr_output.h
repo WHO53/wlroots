@@ -22,7 +22,8 @@
 	WLR_OUTPUT_STATE_SCALE | \
 	WLR_OUTPUT_STATE_TRANSFORM | \
 	WLR_OUTPUT_STATE_RENDER_FORMAT | \
-	WLR_OUTPUT_STATE_SUBPIXEL)
+	WLR_OUTPUT_STATE_SUBPIXEL | \
+	WLR_OUTPUT_STATE_LAYERS)
 
 /**
  * A backend implementation of struct wlr_output.
@@ -100,39 +101,13 @@ struct wlr_output_impl {
  * Initialize a new output.
  */
 void wlr_output_init(struct wlr_output *output, struct wlr_backend *backend,
-	const struct wlr_output_impl *impl, struct wl_display *display);
-/**
- * Update the current output mode.
- *
- * The backend must call this function when the mode is updated to notify
- * compositors about the change.
- */
-void wlr_output_update_mode(struct wlr_output *output,
-	struct wlr_output_mode *mode);
-/**
- * Update the current output custom mode.
- *
- * The backend must call this function when the mode is updated to notify
- * compositors about the change.
- */
-void wlr_output_update_custom_mode(struct wlr_output *output, int32_t width,
-	int32_t height, int32_t refresh);
-/**
- * Update the current output status.
- *
- * The backend must call this function when the status is updated to notify
- * compositors about the change.
- */
-void wlr_output_update_enabled(struct wlr_output *output, bool enabled);
+	const struct wlr_output_impl *impl, struct wl_display *display,
+	const struct wlr_output_state *state);
 /**
  * Notify compositors that they need to submit a new frame in order to apply
  * output changes.
  */
 void wlr_output_update_needs_frame(struct wlr_output *output);
-/**
- * Notify compositors that the output needs to be fully repainted.
- */
-void wlr_output_damage_whole(struct wlr_output *output);
 /**
  * Send a frame event.
  *
@@ -146,5 +121,10 @@ void wlr_output_send_frame(struct wlr_output *output);
  */
 void wlr_output_send_present(struct wlr_output *output,
 	struct wlr_output_event_present *event);
+/**
+ * Request the compositor to apply new state.
+ */
+void wlr_output_send_request_state(struct wlr_output *output,
+	const struct wlr_output_state *state);
 
 #endif

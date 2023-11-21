@@ -7,6 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <wayland-util.h>
+#include <wlr/render/swapchain.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_matrix.h>
 #include <wlr/util/log.h>
@@ -15,7 +16,6 @@
 #include "render/drm_format_set.h"
 #include "render/allocator/allocator.h"
 #include "render/pixel_format.h"
-#include "render/swapchain.h"
 #include "render/wlr_renderer.h"
 
 bool init_drm_renderer(struct wlr_drm_backend *drm,
@@ -55,7 +55,7 @@ static void finish_drm_surface(struct wlr_drm_surface *surf) {
 
 	wlr_swapchain_destroy(surf->swapchain);
 
-	memset(surf, 0, sizeof(*surf));
+	*surf = (struct wlr_drm_surface){0};
 }
 
 bool init_drm_surface(struct wlr_drm_surface *surf,
@@ -99,29 +99,33 @@ struct wlr_buffer *drm_surface_blit(struct wlr_drm_surface *surf,
 	struct wlr_buffer *dst = wlr_swapchain_acquire(surf->swapchain, NULL);
 	if (!dst) {
 		wlr_log(WLR_ERROR, "Failed to acquire multi-GPU swapchain buffer");
-		wlr_texture_destroy(tex);
-		return NULL;
+		goto error_tex;
 	}
 
-	float mat[9];
-	wlr_matrix_identity(mat);
-	wlr_matrix_scale(mat, surf->swapchain->width, surf->swapchain->height);
-
-	if (!wlr_renderer_begin_with_buffer(renderer, dst)) {
-		wlr_log(WLR_ERROR, "Failed to bind multi-GPU destination buffer");
-		wlr_buffer_unlock(dst);
-		wlr_texture_destroy(tex);
-		return NULL;
+	struct wlr_render_pass *pass = wlr_renderer_begin_buffer_pass(renderer, dst, NULL);
+	if (pass == NULL) {
+		wlr_log(WLR_ERROR, "Failed to begin render pass with multi-GPU destination buffer");
+		goto error_dst;
 	}
 
-	wlr_renderer_clear(renderer, (float[]){ 0.0, 0.0, 0.0, 0.0 });
-	wlr_render_texture_with_matrix(renderer, tex, mat, 1.0f);
-
-	wlr_renderer_end(renderer);
+	wlr_render_pass_add_texture(pass, &(struct wlr_render_texture_options){
+		.texture = tex,
+		.blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+	});
+	if (!wlr_render_pass_submit(pass)) {
+		wlr_log(WLR_ERROR, "Failed to submit multi-GPU render pass");
+		goto error_dst;
+	}
 
 	wlr_texture_destroy(tex);
 
 	return dst;
+
+error_dst:
+	wlr_buffer_unlock(dst);
+error_tex:
+	wlr_texture_destroy(tex);
+	return NULL;
 }
 
 
@@ -130,57 +134,60 @@ void drm_plane_finish_surface(struct wlr_drm_plane *plane) {
 		return;
 	}
 
-	drm_fb_clear(&plane->pending_fb);
 	drm_fb_clear(&plane->queued_fb);
 	drm_fb_clear(&plane->current_fb);
 
 	finish_drm_surface(&plane->mgpu_surf);
 }
 
-struct wlr_drm_format *drm_plane_pick_render_format(
-		struct wlr_drm_plane *plane, struct wlr_drm_renderer *renderer) {
+bool drm_plane_pick_render_format(struct wlr_drm_plane *plane,
+		struct wlr_drm_format *fmt, struct wlr_drm_renderer *renderer) {
 	const struct wlr_drm_format_set *render_formats =
 		wlr_renderer_get_render_formats(renderer->wlr_rend);
 	if (render_formats == NULL) {
 		wlr_log(WLR_ERROR, "Failed to get render formats");
-		return NULL;
+		return false;
 	}
 
 	const struct wlr_drm_format_set *plane_formats = &plane->formats;
 
-	uint32_t fmt = DRM_FORMAT_ARGB8888;
-	if (!wlr_drm_format_set_get(&plane->formats, fmt)) {
+	uint32_t format = DRM_FORMAT_ARGB8888;
+	if (!wlr_drm_format_set_get(&plane->formats, format)) {
 		const struct wlr_pixel_format_info *format_info =
-			drm_get_pixel_format_info(fmt);
+			drm_get_pixel_format_info(format);
 		assert(format_info != NULL &&
 			format_info->opaque_substitute != DRM_FORMAT_INVALID);
-		fmt = format_info->opaque_substitute;
+		format = format_info->opaque_substitute;
 	}
 
 	const struct wlr_drm_format *render_format =
-		wlr_drm_format_set_get(render_formats, fmt);
+		wlr_drm_format_set_get(render_formats, format);
 	if (render_format == NULL) {
-		wlr_log(WLR_DEBUG, "Renderer doesn't support format 0x%"PRIX32, fmt);
-		return NULL;
+		wlr_log(WLR_DEBUG, "Renderer doesn't support format 0x%"PRIX32, format);
+		return false;
 	}
 
 	const struct wlr_drm_format *plane_format =
-		wlr_drm_format_set_get(plane_formats, fmt);
+		wlr_drm_format_set_get(plane_formats, format);
 	if (plane_format == NULL) {
 		wlr_log(WLR_DEBUG, "Plane %"PRIu32" doesn't support format 0x%"PRIX32,
-			plane->id, fmt);
-		return NULL;
+			plane->id, format);
+		return false;
 	}
 
-	struct wlr_drm_format *format =
-		wlr_drm_format_intersect(plane_format, render_format);
-	if (format == NULL) {
+	if (!wlr_drm_format_intersect(fmt, plane_format, render_format)) {
 		wlr_log(WLR_DEBUG, "Failed to intersect plane and render "
-			"modifiers for format 0x%"PRIX32, fmt);
-		return NULL;
+			"modifiers for format 0x%"PRIX32, format);
+		return false;
 	}
 
-	return format;
+	if (fmt->len == 0) {
+		wlr_drm_format_finish(fmt);
+		wlr_log(WLR_DEBUG, "Failed to find matching plane and renderer modifiers");
+		return false;
+	}
+
+	return true;
 }
 
 void drm_fb_clear(struct wlr_drm_fb **fb_ptr) {
@@ -192,6 +199,11 @@ void drm_fb_clear(struct wlr_drm_fb **fb_ptr) {
 	wlr_buffer_unlock(fb->wlr_buf); // may destroy the buffer
 
 	*fb_ptr = NULL;
+}
+
+struct wlr_drm_fb *drm_fb_lock(struct wlr_drm_fb *fb) {
+	wlr_buffer_lock(fb->wlr_buf);
+	return fb;
 }
 
 static void drm_fb_handle_destroy(struct wlr_addon *addon) {

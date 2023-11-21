@@ -6,12 +6,16 @@
 #include <wlr/render/wlr_texture.h>
 #include "types/wlr_buffer.h"
 
-void wlr_texture_init(struct wlr_texture *texture,
+void wlr_texture_init(struct wlr_texture *texture, struct wlr_renderer *renderer,
 		const struct wlr_texture_impl *impl, uint32_t width, uint32_t height) {
-	memset(texture, 0, sizeof(*texture));
-	texture->impl = impl;
-	texture->width = width;
-	texture->height = height;
+	assert(renderer);
+
+	*texture = (struct wlr_texture){
+		.renderer = renderer,
+		.impl = impl,
+		.width = width,
+		.height = height,
+	};
 }
 
 void wlr_texture_destroy(struct wlr_texture *texture) {
@@ -72,7 +76,7 @@ struct wlr_texture *wlr_texture_from_buffer(struct wlr_renderer *renderer,
 }
 
 bool wlr_texture_update_from_buffer(struct wlr_texture *texture,
-		struct wlr_buffer *buffer, pixman_region32_t *damage) {
+		struct wlr_buffer *buffer, const pixman_region32_t *damage) {
 	if (!texture->impl->update_from_buffer) {
 		return false;
 	}

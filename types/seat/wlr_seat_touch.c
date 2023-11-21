@@ -66,7 +66,6 @@ static const struct wl_touch_interface touch_impl = {
 };
 
 static void touch_handle_resource_destroy(struct wl_resource *resource) {
-	wl_list_remove(wl_resource_get_link(resource));
 	seat_client_destroy_touch(resource);
 }
 
@@ -145,7 +144,7 @@ static struct wlr_touch_point *touch_point_create(
 		return NULL;
 	}
 
-	struct wlr_touch_point *point = calloc(1, sizeof(struct wlr_touch_point));
+	struct wlr_touch_point *point = calloc(1, sizeof(*point));
 	if (!point) {
 		return NULL;
 	}
@@ -443,12 +442,20 @@ void seat_client_create_touch(struct wlr_seat_client *seat_client,
 	}
 }
 
-void seat_client_destroy_touch(struct wl_resource *resource) {
-	struct wlr_seat_client *seat_client =
-		seat_client_from_touch_resource(resource);
-	if (seat_client == NULL) {
+void seat_client_create_inert_touch(struct wl_client *client, uint32_t version,
+		uint32_t id) {
+	struct wl_resource *resource =
+		wl_resource_create(client, &wl_touch_interface, version, id);
+	if (!resource) {
+		wl_client_post_no_memory(client);
 		return;
 	}
+	wl_resource_set_implementation(resource, &touch_impl, NULL, NULL);
+}
+
+void seat_client_destroy_touch(struct wl_resource *resource) {
+	wl_list_remove(wl_resource_get_link(resource));
+	wl_list_init(wl_resource_get_link(resource));
 	wl_resource_set_user_data(resource, NULL);
 }
 

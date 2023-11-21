@@ -8,10 +8,10 @@
 #define WLR_DAMAGE_RING_MAX_RECTS 20
 
 void wlr_damage_ring_init(struct wlr_damage_ring *ring) {
-	memset(ring, 0, sizeof(*ring));
-
-	ring->width = INT_MAX;
-	ring->height = INT_MAX;
+	*ring = (struct wlr_damage_ring){
+		.width = INT_MAX,
+		.height = INT_MAX,
+	};
 
 	pixman_region32_init(&ring->current);
 	for (size_t i = 0; i < WLR_DAMAGE_RING_PREVIOUS_LEN; ++i) {
@@ -29,17 +29,21 @@ void wlr_damage_ring_finish(struct wlr_damage_ring *ring) {
 void wlr_damage_ring_set_bounds(struct wlr_damage_ring *ring,
 		int32_t width, int32_t height) {
 	if (width == 0 || height == 0) {
-		ring->width = INT_MAX;
-		ring->height = INT_MAX;
-	} else {
-		ring->width = width;
-		ring->height = height;
+		width = INT_MAX;
+		height = INT_MAX;
 	}
+
+	if (ring->width == width && ring->height == height) {
+		return;
+	}
+
+	ring->width = width;
+	ring->height = height;
 	wlr_damage_ring_add_whole(ring);
 }
 
 bool wlr_damage_ring_add(struct wlr_damage_ring *ring,
-		pixman_region32_t *damage) {
+		const pixman_region32_t *damage) {
 	pixman_region32_t clipped;
 	pixman_region32_init(&clipped);
 	pixman_region32_intersect_rect(&clipped, damage,

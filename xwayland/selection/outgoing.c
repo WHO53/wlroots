@@ -269,8 +269,7 @@ static bool xwm_selection_send_data(struct wlr_xwm_selection *selection,
 		return false;
 	}
 
-	struct wlr_xwm_selection_transfer *transfer =
-		calloc(1, sizeof(struct wlr_xwm_selection_transfer));
+	struct wlr_xwm_selection_transfer *transfer = calloc(1, sizeof(*transfer));
 	if (transfer == NULL) {
 		wlr_log(WLR_ERROR, "Allocation failed");
 		return false;
@@ -412,10 +411,12 @@ void xwm_handle_selection_request(struct wlr_xwm *xwm,
 
 	// No xwayland surface focused, deny access to clipboard
 	if (xwm->focus_surface == NULL && xwm->drag_focus == NULL) {
-		char *selection_name = xwm_get_atom_name(xwm, selection->atom);
-		wlr_log(WLR_DEBUG, "denying read access to selection %u (%s): "
-			"no xwayland surface focused", selection->atom, selection_name);
-		free(selection_name);
+		if (wlr_log_get_verbosity() >= WLR_DEBUG) {
+			char *selection_name = xwm_get_atom_name(xwm, selection->atom);
+			wlr_log(WLR_DEBUG, "denying read access to selection %u (%s): "
+				"no xwayland surface focused", selection->atom, selection_name);
+			free(selection_name);
+		}
 		goto fail_notify_requestor;
 	}
 

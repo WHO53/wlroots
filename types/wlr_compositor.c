@@ -15,7 +15,7 @@
 #include "types/wlr_subcompositor.h"
 #include "util/time.h"
 
-#define COMPOSITOR_VERSION 5
+#define COMPOSITOR_VERSION 6
 #define CALLBACK_VERSION 1
 
 static int min(int fst, int snd) {
@@ -36,6 +36,13 @@ static int max(int fst, int snd) {
 
 static void surface_handle_destroy(struct wl_client *client,
 		struct wl_resource *resource) {
+	struct wlr_surface *surface = wlr_surface_from_resource(resource);
+	if (surface->role_resource != NULL) {
+		wl_resource_post_error(resource,
+			WL_SURFACE_ERROR_DEFUNCT_ROLE_OBJECT,
+			"surface was destroyed before its role object");
+		return;
+	}
 	wl_resource_destroy(resource);
 }
 
@@ -54,7 +61,7 @@ static void surface_handle_attach(struct wl_client *client,
 
 	struct wlr_buffer *buffer = NULL;
 	if (buffer_resource != NULL) {
-		buffer = wlr_buffer_from_resource(buffer_resource);
+		buffer = wlr_buffer_try_from_resource(buffer_resource);
 		if (buffer == NULL) {
 			wl_resource_post_error(buffer_resource, 0, "unknown buffer type");
 			return;
@@ -115,7 +122,7 @@ static void surface_handle_set_opaque_region(struct wl_client *client,
 	struct wlr_surface *surface = wlr_surface_from_resource(resource);
 	surface->pending.committed |= WLR_SURFACE_STATE_OPAQUE_REGION;
 	if (region_resource) {
-		pixman_region32_t *region = wlr_region_from_resource(region_resource);
+		const pixman_region32_t *region = wlr_region_from_resource(region_resource);
 		pixman_region32_copy(&surface->pending.opaque, region);
 	} else {
 		pixman_region32_clear(&surface->pending.opaque);
@@ -128,7 +135,7 @@ static void surface_handle_set_input_region(struct wl_client *client,
 	struct wlr_surface *surface = wlr_surface_from_resource(resource);
 	surface->pending.committed |= WLR_SURFACE_STATE_INPUT_REGION;
 	if (region_resource) {
-		pixman_region32_t *region = wlr_region_from_resource(region_resource);
+		const pixman_region32_t *region = wlr_region_from_resource(region_resource);
 		pixman_region32_copy(&surface->pending.input, region);
 	} else {
 		pixman_region32_fini(&surface->pending.input);
@@ -323,7 +330,7 @@ static void surface_state_move(struct wlr_surface_state *state,
 		pixman_region32_copy(&state->input, &next->input);
 	}
 	if (next->committed & WLR_SURFACE_STATE_VIEWPORT) {
-		memcpy(&state->viewport, &next->viewport, sizeof(state->viewport));
+		state->viewport = next->viewport;
 	}
 	if (next->committed & WLR_SURFACE_STATE_FRAME_CALLBACK_LIST) {
 		wl_list_insert_list(&state->frame_callback_list,
@@ -341,6 +348,8 @@ static void surface_state_move(struct wlr_surface_state *state,
 }
 
 static void surface_apply_damage(struct wlr_surface *surface) {
+	surface->has_buffer = surface->current.buffer;
+
 	if (surface->current.buffer == NULL) {
 		// NULL commit
 		if (surface->buffer != NULL) {
@@ -362,11 +371,12 @@ static void surface_apply_damage(struct wlr_surface *surface) {
 		}
 	}
 
+	if (surface->renderer == NULL) {
+		return;
+	}
+
 	struct wlr_client_buffer *buffer = wlr_client_buffer_create(
 			surface->current.buffer, surface->renderer);
-
-	wlr_buffer_unlock(surface->current.buffer);
-	surface->current.buffer = NULL;
 
 	if (buffer == NULL) {
 		wlr_log(WLR_ERROR, "Failed to upload buffer");
@@ -380,8 +390,7 @@ static void surface_apply_damage(struct wlr_surface *surface) {
 }
 
 static void surface_update_opaque_region(struct wlr_surface *surface) {
-	struct wlr_texture *texture = wlr_surface_get_texture(surface);
-	if (texture == NULL) {
+	if (!surface->has_buffer) {
 		pixman_region32_clear(&surface->opaque_region);
 		return;
 	}
@@ -425,14 +434,17 @@ static void surface_commit_state(struct wlr_surface *surface,
 		struct wlr_surface_state *next) {
 	assert(next->cached_state_locks == 0);
 
-	if (surface->role_data != NULL && surface->role->precommit != NULL) {
-		surface->role->precommit(surface, next);
-	}
+	wl_signal_emit_mutable(&surface->events.precommit, next);
 
 	bool invalid_buffer = next->committed & WLR_SURFACE_STATE_BUFFER;
 
-	surface->sx += next->dx;
-	surface->sy += next->dy;
+	if (invalid_buffer && next->buffer == NULL) {
+		surface->unmap_commit = surface->mapped;
+		wlr_surface_unmap(surface);
+	} else {
+		surface->unmap_commit = false;
+	}
+
 	surface_update_damage(&surface->buffer_damage, &surface->current, next);
 
 	pixman_region32_clear(&surface->external_damage);
@@ -461,18 +473,16 @@ static void surface_commit_state(struct wlr_surface *surface,
 
 	// commit subsurface order
 	struct wlr_subsurface *subsurface;
-	wl_list_for_each_reverse(subsurface, &surface->pending.subsurfaces_above,
-			pending.link) {
+	wl_list_for_each(subsurface, &surface->pending.subsurfaces_below, pending.link) {
 		wl_list_remove(&subsurface->current.link);
-		wl_list_insert(&surface->current.subsurfaces_above,
+		wl_list_insert(surface->current.subsurfaces_below.prev,
 			&subsurface->current.link);
 
 		subsurface_handle_parent_commit(subsurface);
 	}
-	wl_list_for_each_reverse(subsurface, &surface->pending.subsurfaces_below,
-			pending.link) {
+	wl_list_for_each(subsurface, &surface->pending.subsurfaces_above, pending.link) {
 		wl_list_remove(&subsurface->current.link);
-		wl_list_insert(&surface->current.subsurfaces_below,
+		wl_list_insert(surface->current.subsurfaces_above.prev,
 			&subsurface->current.link);
 
 		subsurface_handle_parent_commit(subsurface);
@@ -484,11 +494,18 @@ static void surface_commit_state(struct wlr_surface *surface,
 		surface->pending.seq++;
 	}
 
-	if (surface->role_data != NULL && surface->role->commit != NULL) {
+	if (surface->role != NULL && surface->role->commit != NULL &&
+			(surface->role_resource != NULL || surface->role->no_object)) {
 		surface->role->commit(surface);
 	}
 
 	wl_signal_emit_mutable(&surface->events.commit, surface);
+
+	// Release the buffer after emitting the commit event, so that listeners can
+	// access it. Don't leave the buffer locked so that wl_shm buffers can be
+	// released immediately on commit when they are uploaded to the GPU.
+	wlr_buffer_unlock(surface->current.buffer);
+	surface->current.buffer = NULL;
 }
 
 static void surface_handle_commit(struct wl_client *client,
@@ -574,10 +591,10 @@ struct wlr_surface *wlr_surface_from_resource(struct wl_resource *resource) {
 }
 
 static void surface_state_init(struct wlr_surface_state *state) {
-	memset(state, 0, sizeof(*state));
-
-	state->scale = 1;
-	state->transform = WL_OUTPUT_TRANSFORM_NORMAL;
+	*state = (struct wlr_surface_state){
+		.scale = 1,
+		.transform = WL_OUTPUT_TRANSFORM_NORMAL,
+	};
 
 	wl_list_init(&state->subsurfaces_above);
 	wl_list_init(&state->subsurfaces_below);
@@ -612,6 +629,7 @@ static void surface_state_destroy_cached(struct wlr_surface_state *state) {
 }
 
 static void surface_output_destroy(struct wlr_surface_output *surface_output);
+static void surface_destroy_role_object(struct wlr_surface *surface);
 
 static void surface_handle_resource_destroy(struct wl_resource *resource) {
 	struct wlr_surface *surface = wlr_surface_from_resource(resource);
@@ -622,7 +640,7 @@ static void surface_handle_resource_destroy(struct wl_resource *resource) {
 		surface_output_destroy(surface_output);
 	}
 
-	wlr_surface_destroy_role_object(surface);
+	surface_destroy_role_object(surface);
 
 	wl_signal_emit_mutable(&surface->events.destroy, surface);
 
@@ -634,6 +652,7 @@ static void surface_handle_resource_destroy(struct wl_resource *resource) {
 	}
 
 	wl_list_remove(&surface->renderer_destroy.link);
+	wl_list_remove(&surface->role_resource_destroy.link);
 	surface_state_finish(&surface->pending);
 	surface_state_finish(&surface->current);
 	pixman_region32_fini(&surface->buffer_damage);
@@ -655,7 +674,7 @@ static void surface_handle_renderer_destroy(struct wl_listener *listener,
 
 static struct wlr_surface *surface_create(struct wl_client *client,
 		uint32_t version, uint32_t id, struct wlr_renderer *renderer) {
-	struct wlr_surface *surface = calloc(1, sizeof(struct wlr_surface));
+	struct wlr_surface *surface = calloc(1, sizeof(*surface));
 	if (!surface) {
 		wl_client_post_no_memory(client);
 		return NULL;
@@ -679,7 +698,10 @@ static struct wlr_surface *surface_create(struct wl_client *client,
 	surface->pending.seq = 1;
 
 	wl_signal_init(&surface->events.client_commit);
+	wl_signal_init(&surface->events.precommit);
 	wl_signal_init(&surface->events.commit);
+	wl_signal_init(&surface->events.map);
+	wl_signal_init(&surface->events.unmap);
 	wl_signal_init(&surface->events.destroy);
 	wl_signal_init(&surface->events.new_subsurface);
 	wl_list_init(&surface->current_outputs);
@@ -690,8 +712,14 @@ static struct wlr_surface *surface_create(struct wl_client *client,
 	pixman_region32_init(&surface->input_region);
 	wlr_addon_set_init(&surface->addons);
 
-	wl_signal_add(&renderer->events.destroy, &surface->renderer_destroy);
-	surface->renderer_destroy.notify = surface_handle_renderer_destroy;
+	if (renderer != NULL) {
+		wl_signal_add(&renderer->events.destroy, &surface->renderer_destroy);
+		surface->renderer_destroy.notify = surface_handle_renderer_destroy;
+	} else {
+		wl_list_init(&surface->renderer_destroy.link);
+	}
+
+	wl_list_init(&surface->role_resource_destroy.link);
 
 	return surface;
 }
@@ -704,44 +732,97 @@ struct wlr_texture *wlr_surface_get_texture(struct wlr_surface *surface) {
 }
 
 bool wlr_surface_has_buffer(struct wlr_surface *surface) {
-	return wlr_surface_get_texture(surface) != NULL;
+	return surface->has_buffer;
 }
 
-bool wlr_surface_set_role(struct wlr_surface *surface,
-		const struct wlr_surface_role *role, void *role_data,
+void wlr_surface_map(struct wlr_surface *surface) {
+	if (surface->mapped) {
+		return;
+	}
+	assert(wlr_surface_has_buffer(surface));
+	surface->mapped = true;
+
+	struct wlr_subsurface *subsurface;
+	wl_list_for_each(subsurface, &surface->current.subsurfaces_below, current.link) {
+		subsurface_consider_map(subsurface);
+	}
+	wl_list_for_each(subsurface, &surface->current.subsurfaces_above, current.link) {
+		subsurface_consider_map(subsurface);
+	}
+
+	wl_signal_emit_mutable(&surface->events.map, NULL);
+}
+
+void wlr_surface_unmap(struct wlr_surface *surface) {
+	if (!surface->mapped) {
+		return;
+	}
+	surface->mapped = false;
+	wl_signal_emit_mutable(&surface->events.unmap, NULL);
+	if (surface->role != NULL && surface->role->unmap != NULL &&
+			(surface->role_resource != NULL || surface->role->no_object)) {
+		surface->role->unmap(surface);
+	}
+
+	struct wlr_subsurface *subsurface;
+	wl_list_for_each(subsurface, &surface->current.subsurfaces_below, current.link) {
+		wlr_surface_unmap(subsurface->surface);
+	}
+	wl_list_for_each(subsurface, &surface->current.subsurfaces_above, current.link) {
+		wlr_surface_unmap(subsurface->surface);
+	}
+}
+
+bool wlr_surface_set_role(struct wlr_surface *surface, const struct wlr_surface_role *role,
 		struct wl_resource *error_resource, uint32_t error_code) {
 	assert(role != NULL);
 
 	if (surface->role != NULL && surface->role != role) {
 		if (error_resource != NULL) {
 			wl_resource_post_error(error_resource, error_code,
-				"Cannot assign role %s to wl_surface@%" PRIu32 ", already has role %s\n",
+				"Cannot assign role %s to wl_surface@%" PRIu32 ", already has role %s",
 				role->name, wl_resource_get_id(surface->resource),
 				surface->role->name);
 		}
 		return false;
 	}
-	if (surface->role_data != NULL && surface->role_data != role_data) {
+	if (surface->role_resource != NULL) {
 		wl_resource_post_error(error_resource, error_code,
-			"Cannot reassign role %s to wl_surface@%" PRIu32 ","
-			"role object still exists", role->name,
-			wl_resource_get_id(surface->resource));
+			"Cannot reassign role %s to wl_surface@%" PRIu32 ", role object still exists",
+			role->name, wl_resource_get_id(surface->resource));
 		return false;
 	}
 
 	surface->role = role;
-	surface->role_data = role_data;
 	return true;
 }
 
-void wlr_surface_destroy_role_object(struct wlr_surface *surface) {
-	if (surface->role_data == NULL) {
+static void surface_handle_role_resource_destroy(struct wl_listener *listener, void *data) {
+	struct wlr_surface *surface = wl_container_of(listener, surface, role_resource_destroy);
+	surface_destroy_role_object(surface);
+}
+
+void wlr_surface_set_role_object(struct wlr_surface *surface, struct wl_resource *role_resource) {
+	assert(surface->role != NULL);
+	assert(!surface->role->no_object);
+	assert(surface->role_resource == NULL);
+	assert(role_resource != NULL);
+	surface->role_resource = role_resource;
+	surface->role_resource_destroy.notify = surface_handle_role_resource_destroy;
+	wl_resource_add_destroy_listener(role_resource, &surface->role_resource_destroy);
+}
+
+static void surface_destroy_role_object(struct wlr_surface *surface) {
+	if (surface->role_resource == NULL) {
 		return;
 	}
+	wlr_surface_unmap(surface);
 	if (surface->role->destroy != NULL) {
 		surface->role->destroy(surface);
 	}
-	surface->role_data = NULL;
+	surface->role_resource = NULL;
+	wl_list_remove(&surface->role_resource_destroy.link);
+	wl_list_init(&surface->role_resource_destroy.link);
 }
 
 uint32_t wlr_surface_lock_pending(struct wlr_surface *surface) {
@@ -792,12 +873,8 @@ void wlr_surface_unlock_cached(struct wlr_surface *surface, uint32_t seq) {
 }
 
 struct wlr_surface *wlr_surface_get_root_surface(struct wlr_surface *surface) {
-	while (wlr_surface_is_subsurface(surface)) {
-		struct wlr_subsurface *subsurface =
-			wlr_subsurface_from_wlr_surface(surface);
-		if (subsurface == NULL) {
-			break;
-		}
+	struct wlr_subsurface *subsurface;
+	while ((subsurface = wlr_subsurface_try_from_wlr_surface(surface))) {
 		surface = subsurface->parent;
 	}
 	return surface;
@@ -816,7 +893,7 @@ struct wlr_surface *wlr_surface_surface_at(struct wlr_surface *surface,
 	struct wlr_subsurface *subsurface;
 	wl_list_for_each_reverse(subsurface, &surface->current.subsurfaces_above,
 			current.link) {
-		if (!subsurface->mapped) {
+		if (!subsurface->surface->mapped) {
 			continue;
 		}
 
@@ -841,7 +918,7 @@ struct wlr_surface *wlr_surface_surface_at(struct wlr_surface *surface,
 
 	wl_list_for_each_reverse(subsurface, &surface->current.subsurfaces_below,
 			current.link) {
-		if (!subsurface->mapped) {
+		if (!subsurface->surface->mapped) {
 			continue;
 		}
 
@@ -896,7 +973,7 @@ void wlr_surface_send_enter(struct wlr_surface *surface,
 		}
 	}
 
-	surface_output = calloc(1, sizeof(struct wlr_surface_output));
+	surface_output = calloc(1, sizeof(*surface_output));
 	if (surface_output == NULL) {
 		return;
 	}
@@ -951,7 +1028,7 @@ static void surface_for_each_surface(struct wlr_surface *surface, int x, int y,
 		wlr_surface_iterator_func_t iterator, void *user_data) {
 	struct wlr_subsurface *subsurface;
 	wl_list_for_each(subsurface, &surface->current.subsurfaces_below, current.link) {
-		if (!subsurface->mapped) {
+		if (!subsurface->surface->mapped) {
 			continue;
 		}
 
@@ -966,7 +1043,7 @@ static void surface_for_each_surface(struct wlr_surface *surface, int x, int y,
 	iterator(surface, x, y, user_data);
 
 	wl_list_for_each(subsurface, &surface->current.subsurfaces_above, current.link) {
-		if (!subsurface->mapped) {
+		if (!subsurface->surface->mapped) {
 			continue;
 		}
 
@@ -1074,6 +1151,40 @@ void wlr_surface_get_buffer_source_box(struct wlr_surface *surface,
 	}
 }
 
+void wlr_surface_set_preferred_buffer_scale(struct wlr_surface *surface,
+		int32_t scale) {
+	assert(scale > 0);
+
+	if (wl_resource_get_version(surface->resource) <
+			WL_SURFACE_PREFERRED_BUFFER_SCALE_SINCE_VERSION) {
+		return;
+	}
+
+	if (surface->preferred_buffer_scale == scale) {
+		return;
+	}
+
+	wl_surface_send_preferred_buffer_scale(surface->resource, scale);
+	surface->preferred_buffer_scale = scale;
+}
+
+void wlr_surface_set_preferred_buffer_transform(struct wlr_surface *surface,
+		enum wl_output_transform transform) {
+	if (wl_resource_get_version(surface->resource) <
+			WL_SURFACE_PREFERRED_BUFFER_TRANSFORM_SINCE_VERSION) {
+		return;
+	}
+
+	if (surface->preferred_buffer_transform == transform &&
+			surface->preferred_buffer_transform_sent) {
+		return;
+	}
+
+	wl_surface_send_preferred_buffer_transform(surface->resource, transform);
+	surface->preferred_buffer_transform_sent = true;
+	surface->preferred_buffer_transform = transform;
+}
+
 static const struct wl_compositor_interface compositor_impl;
 
 static struct wlr_compositor *compositor_from_resource(
@@ -1131,14 +1242,16 @@ static void compositor_handle_display_destroy(
 }
 
 struct wlr_compositor *wlr_compositor_create(struct wl_display *display,
-		struct wlr_renderer *renderer) {
+		uint32_t version, struct wlr_renderer *renderer) {
+	assert(version <= COMPOSITOR_VERSION);
+
 	struct wlr_compositor *compositor = calloc(1, sizeof(*compositor));
 	if (!compositor) {
 		return NULL;
 	}
 
 	compositor->global = wl_global_create(display, &wl_compositor_interface,
-		COMPOSITOR_VERSION, compositor, compositor_bind);
+		version, compositor, compositor_bind);
 	if (!compositor->global) {
 		free(compositor);
 		return NULL;

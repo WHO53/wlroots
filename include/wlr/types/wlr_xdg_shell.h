@@ -25,13 +25,7 @@ struct wlr_xdg_shell {
 	struct wl_listener display_destroy;
 
 	struct {
-		/**
-		 * The `new_surface` event signals that a client has requested to
-		 * create a new shell surface. At this point, the surface is ready to
-		 * be configured but is not mapped or ready receive input events. The
-		 * surface will be ready to be managed on the `map` event.
-		 */
-		struct wl_signal new_surface;
+		struct wl_signal new_surface; // struct wlr_xdg_surface
 		struct wl_signal destroy;
 	} events;
 
@@ -99,7 +93,7 @@ struct wlr_xdg_popup {
 	struct wl_list link;
 
 	struct wl_resource *resource;
-	bool committed;
+	bool sent_initial_configure;
 	struct wlr_surface *parent;
 	struct wlr_seat *seat;
 
@@ -133,7 +127,7 @@ enum wlr_xdg_surface_role {
 };
 
 struct wlr_xdg_toplevel_state {
-	bool maximized, fullscreen, resizing, activated;
+	bool maximized, fullscreen, resizing, activated, suspended;
 	uint32_t tiled; // enum wlr_edges
 	int32_t width, height;
 	int32_t max_width, max_height;
@@ -154,7 +148,7 @@ enum wlr_xdg_toplevel_configure_field {
 
 struct wlr_xdg_toplevel_configure {
 	uint32_t fields; // enum wlr_xdg_toplevel_configure_field
-	bool maximized, fullscreen, resizing, activated;
+	bool maximized, fullscreen, resizing, activated, suspended;
 	uint32_t tiled; // enum wlr_edges
 	int32_t width, height;
 	struct {
@@ -172,7 +166,6 @@ struct wlr_xdg_toplevel_requested {
 struct wlr_xdg_toplevel {
 	struct wl_resource *resource;
 	struct wlr_xdg_surface *base;
-	bool added;
 
 	struct wlr_xdg_toplevel *parent;
 	struct wl_listener parent_unmap;
@@ -231,19 +224,24 @@ struct wlr_xdg_surface_state {
  * An xdg-surface is a user interface element requiring management by the
  * compositor. An xdg-surface alone isn't useful, a role should be assigned to
  * it in order to map it.
- *
- * When a surface has a role and is ready to be displayed, the `map` event is
- * emitted. When a surface should no longer be displayed, the `unmap` event is
- * emitted. The `unmap` event is guaranteed to be emitted before the `destroy`
- * event if the view is destroyed when mapped.
  */
 struct wlr_xdg_surface {
 	struct wlr_xdg_client *client;
 	struct wl_resource *resource;
 	struct wlr_surface *surface;
 	struct wl_list link; // wlr_xdg_client.surfaces
-	enum wlr_xdg_surface_role role;
 
+	/**
+	 * The lifetime-bound role of the xdg_surface. WLR_XDG_SURFACE_ROLE_NONE
+	 * if the role was never set.
+	 */
+	enum wlr_xdg_surface_role role;
+	/**
+	 * The role object representing the role. NULL if the object was destroyed.
+	 */
+	struct wl_resource *role_resource;
+
+	// NULL if the role resource is inert
 	union {
 		struct wlr_xdg_toplevel *toplevel;
 		struct wlr_xdg_popup *popup;
@@ -251,35 +249,22 @@ struct wlr_xdg_surface {
 
 	struct wl_list popups; // wlr_xdg_popup.link
 
-	bool added, configured, mapped;
+	bool added, configured;
 	struct wl_event_source *configure_idle;
 	uint32_t scheduled_serial;
 	struct wl_list configure_list;
 
 	struct wlr_xdg_surface_state current, pending;
 
-	struct wl_listener surface_commit;
+	// Whether the surface is ready to receive configure events
+	bool initialized;
+	// Whether the latest commit is an initial commit
+	bool initial_commit;
 
 	struct {
 		struct wl_signal destroy;
 		struct wl_signal ping_timeout;
 		struct wl_signal new_popup;
-		/**
-		 * The `map` event signals that the shell surface is ready to be
-		 * managed by the compositor and rendered on the screen. At this point,
-		 * the surface has configured its properties, has had the opportunity
-		 * to bind to the seat to receive input events, and has a buffer that
-		 * is ready to be rendered. You can now safely add this surface to a
-		 * list of views.
-		 */
-		struct wl_signal map;
-		/**
-		 * The `unmap` event signals that the surface is no longer in a state
-		 * where it should be shown on the screen. This might happen if the
-		 * surface no longer has a displayable buffer because either the
-		 * surface has been hidden or is about to be destroyed.
-		 */
-		struct wl_signal unmap;
 
 		// for protocol extensions
 		struct wl_signal configure; // struct wlr_xdg_surface_configure
@@ -287,6 +272,10 @@ struct wlr_xdg_surface {
 	} events;
 
 	void *data;
+
+	// private state
+
+	struct wl_listener role_resource_destroy;
 };
 
 struct wlr_xdg_toplevel_move_event {
@@ -411,6 +400,13 @@ uint32_t wlr_xdg_toplevel_set_wm_capabilities(struct wlr_xdg_toplevel *toplevel,
 		uint32_t caps);
 
 /**
+ * Request that this toplevel consider itself suspended or not
+ * suspended. Returns the associated configure serial.
+ */
+uint32_t wlr_xdg_toplevel_set_suspended(struct wlr_xdg_toplevel *toplevel,
+		bool suspended);
+
+/**
  * Request that this toplevel closes.
  */
 void wlr_xdg_toplevel_send_close(struct wlr_xdg_toplevel *toplevel);
@@ -424,8 +420,9 @@ bool wlr_xdg_toplevel_set_parent(struct wlr_xdg_toplevel *toplevel,
 	struct wlr_xdg_toplevel *parent);
 
 /**
- * Request that this popup closes.
- **/
+ * Notify the client that the popup has been dismissed and destroy the
+ * struct wlr_xdg_popup, rendering the resource inert.
+ */
 void wlr_xdg_popup_destroy(struct wlr_xdg_popup *popup);
 
 /**
@@ -481,18 +478,30 @@ struct wlr_surface *wlr_xdg_surface_popup_surface_at(
 		double *sub_x, double *sub_y);
 
 /**
- * Returns true if the surface has the xdg surface role.
+ * Get a struct wlr_xdg_surface from a struct wlr_surface.
+ *
+ * Returns NULL if the surface doesn't have the xdg_surface role or
+ * if the xdg_surface has been destroyed.
  */
-bool wlr_surface_is_xdg_surface(struct wlr_surface *surface);
+struct wlr_xdg_surface *wlr_xdg_surface_try_from_wlr_surface(struct wlr_surface *surface);
 
 /**
- * Get a struct wlr_xdg_surface from a struct wlr_surface.
- * Asserts that the surface has the xdg surface role.
- * May return NULL even if the surface has the xdg surface role if the
- * corresponding xdg surface has been destroyed.
+ * Get a struct wlr_xdg_toplevel from a struct wlr_surface.
+ *
+ * Returns NULL if the surface doesn't have the xdg_surface role, the
+ * xdg_surface is not a toplevel, or the xdg_surface/xdg_toplevel objects have
+ * been destroyed.
  */
-struct wlr_xdg_surface *wlr_xdg_surface_from_wlr_surface(
-		struct wlr_surface *surface);
+struct wlr_xdg_toplevel *wlr_xdg_toplevel_try_from_wlr_surface(struct wlr_surface *surface);
+
+/**
+ * Get a struct wlr_xdg_popup from a struct wlr_surface.
+ *
+ * Returns NULL if the surface doesn't have the xdg_surface role, the
+ * xdg_surface is not a popup, or the xdg_surface/xdg_popup objects have
+ * been destroyed.
+ */
+struct wlr_xdg_popup *wlr_xdg_popup_try_from_wlr_surface(struct wlr_surface *surface);
 
 /**
  * Get the surface geometry.

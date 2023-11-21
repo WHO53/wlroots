@@ -60,7 +60,7 @@ static void token_handle_destroy(struct wl_client *client,
 }
 
 static bool token_init( struct wlr_xdg_activation_token_v1 *token) {
-	char token_str[TOKEN_STRLEN + 1] = {0};
+	char token_str[TOKEN_SIZE] = {0};
 	if (!generate_token(token_str)) {
 		return false;
 	}
@@ -128,16 +128,16 @@ static void token_handle_commit(struct wl_client *client,
 		return;
 	}
 
-	xdg_activation_token_v1_send_done(token_resource, token->token);
+	wl_signal_emit_mutable(&token->activation->events.new_token, token);
 
-	// TODO: consider emitting a new_token event
+	xdg_activation_token_v1_send_done(token_resource, token->token);
 
 	return;
 
 error:;
 	// Here we send a generated token, but it's invalid and can't be used to
 	// request activation.
-	char token_str[TOKEN_STRLEN + 1] = {0};
+	char token_str[TOKEN_SIZE] = {0};
 	if (!generate_token(token_str)) {
 		wl_client_post_no_memory(client);
 		return;
@@ -362,6 +362,7 @@ struct wlr_xdg_activation_v1 *wlr_xdg_activation_v1_create(
 	wl_list_init(&activation->tokens);
 	wl_signal_init(&activation->events.destroy);
 	wl_signal_init(&activation->events.request_activate);
+	wl_signal_init(&activation->events.new_token);
 
 	activation->global = wl_global_create(display,
 		&xdg_activation_v1_interface, XDG_ACTIVATION_V1_VERSION, activation,

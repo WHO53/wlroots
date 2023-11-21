@@ -24,7 +24,7 @@ if not cc.check_header('vulkan/vulkan.h', dependencies: dep_vulkan)
 	endif
 endif
 
-glslang = find_program('glslangValidator', native: true, required: false)
+glslang = find_program('glslang', 'glslangValidator', native: true, required: false)
 if not glslang.found()
 	if 'vulkan' in renderers
 		error('\n'.join(msg).format('glslang'))
@@ -37,6 +37,7 @@ glslang_version_info = run_command(glslang, '--version', check: true).stdout()
 glslang_version = glslang_version_info.split('\n')[0].split(':')[-1]
 
 wlr_files += files(
+	'pass.c',
 	'renderer.c',
 	'texture.c',
 	'vulkan.c',

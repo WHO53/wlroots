@@ -69,8 +69,7 @@ static void handle_device_added(struct wlr_libinput_backend *backend,
 	const char *name = libinput_device_get_name(libinput_dev);
 	wlr_log(WLR_DEBUG, "Adding %s [%d:%d]", name, vendor, product);
 
-	struct wlr_libinput_input_device *dev =
-		calloc(1, sizeof(struct wlr_libinput_input_device));
+	struct wlr_libinput_input_device *dev = calloc(1, sizeof(*dev));
 	if (dev == NULL) {
 		wlr_log_errno(WLR_ERROR, "failed to allocate wlr_libinput_input_device");
 		return;
@@ -174,12 +173,12 @@ void handle_libinput_event(struct wlr_libinput_backend *backend,
 		handle_pointer_button(event, &dev->pointer);
 		break;
 	case LIBINPUT_EVENT_POINTER_AXIS:
-#if !LIBINPUT_HAS_SCROLL_VALUE120
+#if !HAVE_LIBINPUT_SCROLL_VALUE120
 		/* This event must be ignored in favour of the SCROLL_* events */
 		handle_pointer_axis(event, &dev->pointer);
 #endif
 		break;
-#if LIBINPUT_HAS_SCROLL_VALUE120
+#if HAVE_LIBINPUT_SCROLL_VALUE120
 	case LIBINPUT_EVENT_POINTER_SCROLL_WHEEL:
 		handle_pointer_axis_value120(event, &dev->pointer,
 			WLR_AXIS_SOURCE_WHEEL);
@@ -250,7 +249,7 @@ void handle_libinput_event(struct wlr_libinput_backend *backend,
 	case LIBINPUT_EVENT_GESTURE_PINCH_END:
 		handle_pointer_pinch_end(event, &dev->pointer);
 		break;
-#if LIBINPUT_HAS_HOLD_GESTURES
+#if HAVE_LIBINPUT_HOLD_GESTURES
 	case LIBINPUT_EVENT_GESTURE_HOLD_BEGIN:
 		handle_pointer_hold_begin(event, &dev->pointer);
 		break;

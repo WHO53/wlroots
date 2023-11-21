@@ -7,7 +7,8 @@
 struct wlr_headless_backend *headless_backend_from_backend(
 		struct wlr_backend *wlr_backend) {
 	assert(wlr_backend_is_headless(wlr_backend));
-	return (struct wlr_headless_backend *)wlr_backend;
+	struct wlr_headless_backend *backend = wl_container_of(wlr_backend, backend, backend);
+	return backend;
 }
 
 static bool backend_start(struct wlr_backend *wlr_backend) {
@@ -17,8 +18,6 @@ static bool backend_start(struct wlr_backend *wlr_backend) {
 
 	struct wlr_headless_output *output;
 	wl_list_for_each(output, &backend->outputs, link) {
-		wl_event_source_timer_update(output->frame_timer, output->frame_delay);
-		wlr_output_update_enabled(&output->wlr_output, true);
 		wl_signal_emit_mutable(&backend->backend.events.new_output,
 			&output->wlr_output);
 	}
@@ -34,14 +33,14 @@ static void backend_destroy(struct wlr_backend *wlr_backend) {
 		return;
 	}
 
-	wl_list_remove(&backend->display_destroy.link);
+	wlr_backend_finish(wlr_backend);
 
 	struct wlr_headless_output *output, *output_tmp;
 	wl_list_for_each_safe(output, output_tmp, &backend->outputs, link) {
 		wlr_output_destroy(&output->wlr_output);
 	}
 
-	wlr_backend_finish(wlr_backend);
+	wl_list_remove(&backend->display_destroy.link);
 
 	free(backend);
 }
@@ -67,8 +66,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 struct wlr_backend *wlr_headless_backend_create(struct wl_display *display) {
 	wlr_log(WLR_INFO, "Creating headless backend");
 
-	struct wlr_headless_backend *backend =
-		calloc(1, sizeof(struct wlr_headless_backend));
+	struct wlr_headless_backend *backend = calloc(1, sizeof(*backend));
 	if (!backend) {
 		wlr_log(WLR_ERROR, "Failed to allocate wlr_headless_backend");
 		return NULL;

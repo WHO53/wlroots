@@ -1,16 +1,18 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <wlr/util/log.h>
+#include <wlr/render/swapchain.h>
 #include <wlr/types/wlr_buffer.h>
 #include "render/allocator/allocator.h"
 #include "render/drm_format_set.h"
-#include "render/swapchain.h"
 
 static void swapchain_handle_allocator_destroy(struct wl_listener *listener,
 		void *data) {
 	struct wlr_swapchain *swapchain =
 		wl_container_of(listener, swapchain, allocator_destroy);
 	swapchain->allocator = NULL;
+	wl_list_remove(&swapchain->allocator_destroy.link);
+	wl_list_init(&swapchain->allocator_destroy.link);
 }
 
 struct wlr_swapchain *wlr_swapchain_create(
@@ -24,8 +26,7 @@ struct wlr_swapchain *wlr_swapchain_create(
 	swapchain->width = width;
 	swapchain->height = height;
 
-	swapchain->format = wlr_drm_format_dup(format);
-	if (swapchain->format == NULL) {
+	if (!wlr_drm_format_copy(&swapchain->format, format)) {
 		free(swapchain);
 		return NULL;
 	}
@@ -41,7 +42,7 @@ static void slot_reset(struct wlr_swapchain_slot *slot) {
 		wl_list_remove(&slot->release.link);
 	}
 	wlr_buffer_drop(slot->buffer);
-	memset(slot, 0, sizeof(*slot));
+	*slot = (struct wlr_swapchain_slot){0};
 }
 
 void wlr_swapchain_destroy(struct wlr_swapchain *swapchain) {
@@ -52,7 +53,7 @@ void wlr_swapchain_destroy(struct wlr_swapchain *swapchain) {
 		slot_reset(&swapchain->slots[i]);
 	}
 	wl_list_remove(&swapchain->allocator_destroy.link);
-	free(swapchain->format);
+	wlr_drm_format_finish(&swapchain->format);
 	free(swapchain);
 }
 
@@ -104,7 +105,7 @@ struct wlr_buffer *wlr_swapchain_acquire(struct wlr_swapchain *swapchain,
 
 	wlr_log(WLR_DEBUG, "Allocating new swapchain buffer");
 	free_slot->buffer = wlr_allocator_create_buffer(swapchain->allocator,
-		swapchain->width, swapchain->height, swapchain->format);
+		swapchain->width, swapchain->height, &swapchain->format);
 	if (free_slot->buffer == NULL) {
 		wlr_log(WLR_ERROR, "Failed to allocate buffer");
 		return NULL;

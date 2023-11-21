@@ -16,8 +16,17 @@
 
 static const struct wlr_tablet_tool_v2_grab_interface default_tool_grab_interface;
 
+static void tablet_tool_cursor_surface_handle_commit(struct wlr_surface *surface) {
+	pixman_region32_clear(&surface->input_region);
+	if (wlr_surface_has_buffer(surface)) {
+		wlr_surface_map(surface);
+	}
+}
+
 static const struct wlr_surface_role tablet_tool_cursor_surface_role = {
 	.name = "wp_tablet_tool-cursor",
+	.no_object = true,
+	.commit = tablet_tool_cursor_surface_handle_commit,
 };
 
 static void handle_tablet_tool_v2_set_cursor(struct wl_client *client,
@@ -32,10 +41,12 @@ static void handle_tablet_tool_v2_set_cursor(struct wl_client *client,
 	struct wlr_surface *surface = NULL;
 	if (surface_resource != NULL) {
 		surface = wlr_surface_from_resource(surface_resource);
-		if (!wlr_surface_set_role(surface, &tablet_tool_cursor_surface_role, NULL,
+		if (!wlr_surface_set_role(surface, &tablet_tool_cursor_surface_role,
 				surface_resource, ZWP_TABLET_TOOL_V2_ERROR_ROLE)) {
 			return;
 		}
+
+		tablet_tool_cursor_surface_handle_commit(surface);
 	}
 
 	struct wlr_tablet_v2_event_cursor evt = {
@@ -108,8 +119,7 @@ void destroy_tablet_tool_v2(struct wl_resource *resource) {
 
 void add_tablet_tool_client(struct wlr_tablet_seat_client_v2 *seat,
 		struct wlr_tablet_v2_tablet_tool *tool) {
-	struct wlr_tablet_tool_client_v2 *client =
-		calloc(1, sizeof(struct wlr_tablet_tool_client_v2));
+	struct wlr_tablet_tool_client_v2 *client = calloc(1, sizeof(*client));
 	if (!client) {
 		return;
 	}
@@ -222,8 +232,7 @@ struct wlr_tablet_v2_tablet_tool *wlr_tablet_tool_create(
 	if (!seat) {
 		return NULL;
 	}
-	struct wlr_tablet_v2_tablet_tool *tool =
-		calloc(1, sizeof(struct wlr_tablet_v2_tablet_tool));
+	struct wlr_tablet_v2_tablet_tool *tool = calloc(1, sizeof(*tool));
 	if (!tool) {
 		return NULL;
 	}
@@ -811,15 +820,14 @@ void wlr_tablet_tool_v2_start_implicit_grab(
 		return;
 	}
 
-	struct wlr_tablet_tool_v2_grab *grab =
-		calloc(1, sizeof(struct wlr_tablet_tool_v2_grab));
+	struct wlr_tablet_tool_v2_grab *grab = calloc(1, sizeof(*grab));
 	if (!grab) {
 		return;
 	}
 
 	grab->interface = &implicit_tool_grab_interface;
 	grab->tool = tool;
-	struct implicit_grab_state *state = calloc(1, sizeof(struct implicit_grab_state));
+	struct implicit_grab_state *state = calloc(1, sizeof(*state));
 	if (!state) {
 		free(grab);
 		return;

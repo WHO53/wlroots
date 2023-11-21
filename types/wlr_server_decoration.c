@@ -24,7 +24,7 @@ static void server_decoration_handle_request_mode(struct wl_client *client,
 		struct wl_resource *resource, uint32_t mode) {
 	struct wlr_server_decoration *decoration =
 		decoration_from_resource(resource);
-	if (decoration->mode == mode) {
+	if (decoration == NULL || decoration->mode == mode) {
 		return;
 	}
 	decoration->mode = mode;
@@ -81,8 +81,7 @@ static void server_decoration_manager_handle_create(struct wl_client *client,
 		manager_from_resource(manager_resource);
 	struct wlr_surface *surface = wlr_surface_from_resource(surface_resource);
 
-	struct wlr_server_decoration *decoration =
-		calloc(1, sizeof(struct wlr_server_decoration));
+	struct wlr_server_decoration *decoration = calloc(1, sizeof(*decoration));
 	if (decoration == NULL) {
 		wl_client_post_no_memory(client);
 		return;
@@ -145,7 +144,6 @@ static void server_decoration_manager_destroy_resource(
 static void server_decoration_manager_bind(struct wl_client *client, void *data,
 		uint32_t version, uint32_t id) {
 	struct wlr_server_decoration_manager *manager = data;
-	assert(client && manager);
 
 	struct wl_resource *resource = wl_resource_create(client,
 		&org_kde_kwin_server_decoration_manager_interface, version, id);
@@ -173,8 +171,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 
 struct wlr_server_decoration_manager *wlr_server_decoration_manager_create(
 		struct wl_display *display) {
-	struct wlr_server_decoration_manager *manager =
-		calloc(1, sizeof(struct wlr_server_decoration_manager));
+	struct wlr_server_decoration_manager *manager = calloc(1, sizeof(*manager));
 	if (manager == NULL) {
 		return NULL;
 	}

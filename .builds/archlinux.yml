@@ -3,6 +3,8 @@ packages:
   - clang
   - ffmpeg
   - libinput
+  - libdisplay-info
+  - libliftoff
   - libxkbcommon
   - mesa
   - meson
@@ -24,8 +26,8 @@ sources:
 tasks:
   - setup: |
       cd wlroots
-      CC=gcc meson build-gcc --fatal-meson-warnings --default-library=both -Dauto_features=enabled --prefix /usr -Db_sanitize=address,undefined
-      CC=clang meson build-clang --fatal-meson-warnings -Dauto_features=enabled
+      CC=gcc meson setup build-gcc --fatal-meson-warnings --default-library=both -Dauto_features=enabled --prefix /usr -Db_sanitize=address,undefined
+      CC=clang meson setup build-clang --fatal-meson-warnings -Dauto_features=enabled
   - gcc: |
       cd wlroots/build-gcc
       ninja
@@ -42,5 +44,6 @@ tasks:
       export WLR_BACKENDS=drm
       export WLR_RENDERER=pixman
       export WLR_DRM_DEVICES=/dev/dri/by-path/platform-vkms-card
+      export UBSAN_OPTIONS=halt_on_error=1
       sudo chmod ugo+rw /dev/dri/by-path/platform-vkms-card
       sudo -E seatd-launch -- ./tinywl -s 'kill $PPID' || [ $? = 143 ]

@@ -11,9 +11,12 @@ struct wlr_drm_connector;
 int32_t calculate_refresh_rate(const drmModeModeInfo *mode);
 enum wlr_output_mode_aspect_ratio get_picture_aspect_ratio(const drmModeModeInfo *mode);
 // Returns manufacturer based on pnp id
-const char *get_pnp_manufacturer(uint16_t code);
+const char *get_pnp_manufacturer(const char code[static 3]);
 // Populates the make/model/phys_{width,height} of output from the edid data
 void parse_edid(struct wlr_drm_connector *conn, size_t len, const uint8_t *data);
+const char *drm_connector_status_str(drmModeConnection status);
+void generate_cvt_mode(drmModeModeInfo *mode, int hdisplay, int vdisplay,
+	float vrefresh);
 
 // Part of match_obj
 enum {

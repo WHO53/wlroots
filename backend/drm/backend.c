@@ -16,7 +16,8 @@
 struct wlr_drm_backend *get_drm_backend_from_backend(
 		struct wlr_backend *wlr_backend) {
 	assert(wlr_backend_is_drm(wlr_backend));
-	return (struct wlr_drm_backend *)wlr_backend;
+	struct wlr_drm_backend *backend = wl_container_of(wlr_backend, backend, backend);
+	return backend;
 }
 
 static bool backend_start(struct wlr_backend *backend) {
@@ -33,16 +34,17 @@ static void backend_destroy(struct wlr_backend *backend) {
 	struct wlr_drm_backend *drm = get_drm_backend_from_backend(backend);
 
 	struct wlr_drm_connector *conn, *next;
-	wl_list_for_each_safe(conn, next, &drm->outputs, link) {
+	wl_list_for_each_safe(conn, next, &drm->connectors, link) {
+		conn->crtc = NULL; // leave CRTCs on when shutting down
 		destroy_drm_connector(conn);
 	}
 
-	wlr_backend_finish(backend);
-
-	struct wlr_drm_fb *fb, *fb_tmp;
-	wl_list_for_each_safe(fb, fb_tmp, &drm->fbs, link) {
-		drm_fb_destroy(fb);
+	struct wlr_drm_page_flip *page_flip, *page_flip_tmp;
+	wl_list_for_each_safe(page_flip, page_flip_tmp, &drm->page_flips, link) {
+		drm_page_flip_destroy(page_flip);
 	}
+
+	wlr_backend_finish(backend);
 
 	wl_list_remove(&drm->display_destroy.link);
 	wl_list_remove(&drm->session_destroy.link);
@@ -57,15 +59,15 @@ static void backend_destroy(struct wlr_backend *backend) {
 
 	finish_drm_resources(drm);
 
+	struct wlr_drm_fb *fb, *fb_tmp;
+	wl_list_for_each_safe(fb, fb_tmp, &drm->fbs, link) {
+		drm_fb_destroy(fb);
+	}
+
 	free(drm->name);
 	wlr_session_close_file(drm->session, drm->dev);
 	wl_event_source_remove(drm->drm_event);
 	free(drm);
-}
-
-static clockid_t backend_get_presentation_clock(struct wlr_backend *backend) {
-	struct wlr_drm_backend *drm = get_drm_backend_from_backend(backend);
-	return drm->clock;
 }
 
 static int backend_get_drm_fd(struct wlr_backend *backend) {
@@ -85,7 +87,6 @@ static uint32_t drm_backend_get_buffer_caps(struct wlr_backend *backend) {
 static const struct wlr_backend_impl backend_impl = {
 	.start = backend_start,
 	.destroy = backend_destroy,
-	.get_presentation_clock = backend_get_presentation_clock,
 	.get_drm_fd = backend_get_drm_fd,
 	.get_buffer_caps = drm_backend_get_buffer_caps,
 };
@@ -119,23 +120,24 @@ static void handle_session_active(struct wl_listener *listener, void *data) {
 		}
 
 		struct wlr_drm_connector *conn;
-		wl_list_for_each(conn, &drm->outputs, link) {
-			struct wlr_output_mode *mode = NULL;
-			uint32_t committed = WLR_OUTPUT_STATE_ENABLED;
-			if (conn->output.enabled && conn->output.current_mode != NULL) {
-				committed |= WLR_OUTPUT_STATE_MODE;
-				mode = conn->output.current_mode;
+		wl_list_for_each(conn, &drm->connectors, link) {
+			bool enabled = conn->status != DRM_MODE_DISCONNECTED && conn->output.enabled;
+
+			struct wlr_output_state state;
+			wlr_output_state_init(&state);
+			wlr_output_state_set_enabled(&state, enabled);
+			if (enabled) {
+				if (conn->output.current_mode != NULL) {
+					wlr_output_state_set_mode(&state, conn->output.current_mode);
+				} else {
+					wlr_output_state_set_custom_mode(&state,
+						conn->output.width, conn->output.height, conn->output.refresh);
+				}
 			}
-			struct wlr_output_state state = {
-				.committed = committed,
-				.allow_artifacts = true,
-				.enabled = mode != NULL,
-				.mode_type = WLR_OUTPUT_STATE_MODE_FIXED,
-				.mode = mode,
-			};
 			if (!drm_connector_commit_state(conn, &state)) {
 				wlr_drm_conn_log(conn, WLR_ERROR, "Failed to restore state after VT switch");
 			}
+			wlr_output_state_finish(&state);
 		}
 	} else {
 		wlr_log(WLR_INFO, "DRM fd paused");
@@ -200,7 +202,7 @@ struct wlr_backend *wlr_drm_backend_create(struct wl_display *display,
 	wlr_log(WLR_INFO, "Initializing DRM backend for %s (%s)", name, version->name);
 	drmFreeVersion(version);
 
-	struct wlr_drm_backend *drm = calloc(1, sizeof(struct wlr_drm_backend));
+	struct wlr_drm_backend *drm = calloc(1, sizeof(*drm));
 	if (!drm) {
 		wlr_log_errno(WLR_ERROR, "Allocation failed");
 		return NULL;
@@ -209,7 +211,8 @@ struct wlr_backend *wlr_drm_backend_create(struct wl_display *display,
 
 	drm->session = session;
 	wl_list_init(&drm->fbs);
-	wl_list_init(&drm->outputs);
+	wl_list_init(&drm->connectors);
+	wl_list_init(&drm->page_flips);
 
 	drm->dev = dev;
 	drm->fd = dev->fd;
@@ -270,7 +273,7 @@ struct wlr_backend *wlr_drm_backend_create(struct wl_display *display,
 		// Forbid implicit modifiers, because their meaning changes from one
 		// GPU to another.
 		for (size_t i = 0; i < texture_formats->len; i++) {
-			const struct wlr_drm_format *fmt = texture_formats->formats[i];
+			const struct wlr_drm_format *fmt = &texture_formats->formats[i];
 			for (size_t j = 0; j < fmt->len; j++) {
 				uint64_t mod = fmt->modifiers[j];
 				if (mod == DRM_FORMAT_MOD_INVALID) {

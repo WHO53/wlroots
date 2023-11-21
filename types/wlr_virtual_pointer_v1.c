@@ -113,7 +113,7 @@ static void virtual_pointer_frame(struct wl_client *client,
 			/* Deliver pending axis event */
 			wl_signal_emit_mutable(&pointer->pointer.events.axis,
 					&pointer->axis_event[i]);
-			memset(&pointer->axis_event[i], 0, sizeof(pointer->axis_event[i]));
+			pointer->axis_event[i] = (struct wlr_pointer_axis_event){0};
 			pointer->axis_valid[i] = false;
 		}
 	}
@@ -230,8 +230,7 @@ static void virtual_pointer_manager_create_virtual_pointer_with_output(
 		uint32_t id) {
 	struct wlr_virtual_pointer_manager_v1 *manager = manager_from_resource(resource);
 
-	struct wlr_virtual_pointer_v1 *virtual_pointer = calloc(1,
-		sizeof(struct wlr_virtual_pointer_v1));
+	struct wlr_virtual_pointer_v1 *virtual_pointer = calloc(1, sizeof(*virtual_pointer));
 	if (!virtual_pointer) {
 		wl_client_post_no_memory(client);
 		return;
@@ -259,7 +258,7 @@ static void virtual_pointer_manager_create_virtual_pointer_with_output(
 	if (seat) {
 		struct wlr_seat_client *seat_client =
 			wlr_seat_client_from_resource(seat);
-		event.suggested_seat = seat_client->seat;
+		event.suggested_seat = seat_client != NULL ? seat_client->seat : NULL;
 	}
 
 	if (output) {
@@ -321,8 +320,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 
 struct wlr_virtual_pointer_manager_v1* wlr_virtual_pointer_manager_v1_create(
 		struct wl_display *display) {
-	struct wlr_virtual_pointer_manager_v1 *manager = calloc(1,
-		sizeof(struct wlr_virtual_pointer_manager_v1));
+	struct wlr_virtual_pointer_manager_v1 *manager = calloc(1, sizeof(*manager));
 	if (!manager) {
 		return NULL;
 	}

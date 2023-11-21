@@ -47,17 +47,13 @@ static void xcursor_destroy(struct wlr_xcursor *cursor) {
 
 static struct wlr_xcursor *xcursor_create_from_data(
 		const struct cursor_metadata *metadata, struct wlr_xcursor_theme *theme) {
-	struct wlr_xcursor *cursor;
-	struct wlr_xcursor_image *image;
-	int size;
-
-	cursor = malloc(sizeof(*cursor));
+	struct wlr_xcursor *cursor = calloc(1, sizeof(*cursor));
 	if (!cursor) {
 		return NULL;
 	}
 
 	cursor->image_count = 1;
-	cursor->images = malloc(sizeof(*cursor->images));
+	cursor->images = calloc(1, sizeof(*cursor->images));
 	if (!cursor->images) {
 		goto err_free_cursor;
 	}
@@ -65,7 +61,7 @@ static struct wlr_xcursor *xcursor_create_from_data(
 	cursor->name = strdup(metadata->name);
 	cursor->total_delay = 0;
 
-	image = malloc(sizeof(*image));
+	struct wlr_xcursor_image *image = calloc(1, sizeof(*image));
 	if (!image) {
 		goto err_free_images;
 	}
@@ -78,9 +74,8 @@ static struct wlr_xcursor *xcursor_create_from_data(
 	image->hotspot_y = metadata->hotspot_y;
 	image->delay = 0;
 
-	size = metadata->width * metadata->height * sizeof(uint32_t);
+	int size = metadata->width * metadata->height * sizeof(uint32_t);
 	image->buffer = malloc(size);
-
 	if (!image->buffer) {
 		goto err_free_image;
 	}
@@ -102,42 +97,33 @@ err_free_cursor:
 }
 
 static void load_default_theme(struct wlr_xcursor_theme *theme) {
-	uint32_t i;
-
 	free(theme->name);
 	theme->name = strdup("default");
 
-	theme->cursor_count = sizeof(cursor_metadata) / sizeof(cursor_metadata[0]);
-	theme->cursors = malloc(theme->cursor_count * sizeof(*theme->cursors));
-
+	size_t cursor_count = sizeof(cursor_metadata) / sizeof(cursor_metadata[0]);
+	theme->cursor_count = 0;
+	theme->cursors = malloc(cursor_count * sizeof(*theme->cursors));
 	if (theme->cursors == NULL) {
-		theme->cursor_count = 0;
 		return;
 	}
 
-	for (i = 0; i < theme->cursor_count; ++i) {
-		theme->cursors[i] =
-			xcursor_create_from_data(&cursor_metadata[i], theme);
-
+	for (uint32_t i = 0; i < cursor_count; ++i) {
+		theme->cursors[i] = xcursor_create_from_data(&cursor_metadata[i], theme);
 		if (theme->cursors[i] == NULL) {
 			break;
 		}
+		++theme->cursor_count;
 	}
-	theme->cursor_count = i;
 }
 
 static struct wlr_xcursor *xcursor_create_from_xcursor_images(
-		XcursorImages *images, struct wlr_xcursor_theme *theme) {
-	struct wlr_xcursor *cursor;
-	struct wlr_xcursor_image *image;
-	int i, size;
-
-	cursor = malloc(sizeof(*cursor));
+		struct xcursor_images *images, struct wlr_xcursor_theme *theme) {
+	struct wlr_xcursor *cursor = calloc(1, sizeof(*cursor));
 	if (!cursor) {
 		return NULL;
 	}
 
-	cursor->images = malloc(images->nimage * sizeof(cursor->images[0]));
+	cursor->images = calloc(images->nimage, sizeof(cursor->images[0]));
 	if (!cursor->images) {
 		free(cursor);
 		return NULL;
@@ -146,8 +132,8 @@ static struct wlr_xcursor *xcursor_create_from_xcursor_images(
 	cursor->name = strdup(images->name);
 	cursor->total_delay = 0;
 
-	for (i = 0; i < images->nimage; i++) {
-		image = malloc(sizeof(*image));
+	for (int i = 0; i < images->nimage; i++) {
+		struct wlr_xcursor_image *image = calloc(1, sizeof(*image));
 		if (image == NULL) {
 			break;
 		}
@@ -160,7 +146,7 @@ static struct wlr_xcursor *xcursor_create_from_xcursor_images(
 		image->hotspot_y = images->images[i]->yhot;
 		image->delay = images->images[i]->delay;
 
-		size = image->width * image->height * 4;
+		size_t size = image->width * image->height * 4;
 		image->buffer = malloc(size);
 		if (!image->buffer) {
 			free(image);
@@ -171,8 +157,8 @@ static struct wlr_xcursor *xcursor_create_from_xcursor_images(
 		memcpy(image->buffer, images->images[i]->pixels, size);
 		cursor->total_delay += image->delay;
 		cursor->images[i] = image;
+		cursor->image_count++;
 	}
-	cursor->image_count = i;
 
 	if (cursor->image_count == 0) {
 		free(cursor->name);
@@ -184,24 +170,19 @@ static struct wlr_xcursor *xcursor_create_from_xcursor_images(
 	return cursor;
 }
 
-static void load_callback(XcursorImages *images, void *data) {
+static void load_callback(struct xcursor_images *images, void *data) {
 	struct wlr_xcursor_theme *theme = data;
-	struct wlr_xcursor *cursor;
 
 	if (wlr_xcursor_theme_get_cursor(theme, images->name)) {
-		XcursorImagesDestroy(images);
+		xcursor_images_destroy(images);
 		return;
 	}
 
-	cursor = xcursor_create_from_xcursor_images(images, theme);
-
+	struct wlr_xcursor *cursor = xcursor_create_from_xcursor_images(images, theme);
 	if (cursor) {
-		struct wlr_xcursor **cursors;
 		theme->cursor_count++;
-		cursors =
-			realloc(theme->cursors,
-				theme->cursor_count * sizeof(theme->cursors[0]));
-
+		struct wlr_xcursor **cursors = realloc(theme->cursors,
+			theme->cursor_count * sizeof(theme->cursors[0]));
 		if (cursors == NULL) {
 			theme->cursor_count--;
 			free(cursor);
@@ -211,13 +192,11 @@ static void load_callback(XcursorImages *images, void *data) {
 		}
 	}
 
-	XcursorImagesDestroy(images);
+	xcursor_images_destroy(images);
 }
 
 struct wlr_xcursor_theme *wlr_xcursor_theme_load(const char *name, int size) {
-	struct wlr_xcursor_theme *theme;
-
-	theme = malloc(sizeof(*theme));
+	struct wlr_xcursor_theme *theme = calloc(1, sizeof(*theme));
 	if (!theme) {
 		return NULL;
 	}
@@ -251,9 +230,7 @@ out_error_name:
 }
 
 void wlr_xcursor_theme_destroy(struct wlr_xcursor_theme *theme) {
-	unsigned int i;
-
-	for (i = 0; i < theme->cursor_count; i++) {
+	for (unsigned int i = 0; i < theme->cursor_count; i++) {
 		xcursor_destroy(theme->cursors[i]);
 	}
 
@@ -262,11 +239,9 @@ void wlr_xcursor_theme_destroy(struct wlr_xcursor_theme *theme) {
 	free(theme);
 }
 
-struct wlr_xcursor *wlr_xcursor_theme_get_cursor(struct wlr_xcursor_theme *theme,
+static struct wlr_xcursor *xcursor_theme_get_cursor(struct wlr_xcursor_theme *theme,
 		const char *name) {
-	unsigned int i;
-
-	for (i = 0; i < theme->cursor_count; i++) {
+	for (unsigned int i = 0; i < theme->cursor_count; i++) {
 		if (strcmp(name, theme->cursors[i]->name) == 0) {
 			return theme->cursors[i];
 		}
@@ -275,11 +250,49 @@ struct wlr_xcursor *wlr_xcursor_theme_get_cursor(struct wlr_xcursor_theme *theme
 	return NULL;
 }
 
+struct wlr_xcursor *wlr_xcursor_theme_get_cursor(struct wlr_xcursor_theme *theme,
+		const char *name) {
+	struct wlr_xcursor *xcursor = xcursor_theme_get_cursor(theme, name);
+	if (xcursor) {
+		return xcursor;
+	}
+
+	// Try the legacy name as a fallback
+	const char *fallback;
+	if (strcmp(name, "default") == 0) {
+		fallback = "left_ptr";
+	} else if (strcmp(name, "text") == 0) {
+		fallback = "xterm";
+	} else if (strcmp(name, "pointer") == 0) {
+		fallback = "hand1";
+	} else if (strcmp(name, "wait") == 0) {
+		fallback = "watch";
+	} else if (strcmp(name, "all-scroll") == 0) {
+		fallback = "grabbing";
+	} else if (strcmp(name, "sw-resize") == 0) {
+		fallback = "bottom_left_corner";
+	} else if (strcmp(name, "se-resize") == 0) {
+		fallback = "bottom_right_corner";
+	} else if (strcmp(name, "s-resize") == 0) {
+		fallback = "bottom_side";
+	} else if (strcmp(name, "w-resize") == 0) {
+		fallback = "left_side";
+	} else if (strcmp(name, "e-resize") == 0) {
+		fallback = "right_side";
+	} else if (strcmp(name, "nw-resize") == 0) {
+		fallback = "top_left_corner";
+	} else if (strcmp(name, "ne-resize") == 0) {
+		fallback = "top_right_corner";
+	} else if (strcmp(name, "n-resize") == 0) {
+		fallback = "top_side";
+	} else {
+		return NULL;
+	}
+	return xcursor_theme_get_cursor(theme, fallback);
+}
+
 static int xcursor_frame_and_duration(struct wlr_xcursor *cursor,
 		uint32_t time, uint32_t *duration) {
-	uint32_t t;
-	int i;
-
 	if (cursor->image_count == 1) {
 		if (duration) {
 			*duration = 0;
@@ -287,8 +300,8 @@ static int xcursor_frame_and_duration(struct wlr_xcursor *cursor,
 		return 0;
 	}
 
-	i = 0;
-	t = time % cursor->total_delay;
+	int i = 0;
+	uint32_t t = time % cursor->total_delay;
 
 	/* If there is a 0 delay in the image set then this
 	 * loop breaks on it and we display that cursor until

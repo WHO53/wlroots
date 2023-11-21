@@ -1,7 +1,9 @@
 #define _POSIX_C_SOURCE 200809L
 #include <assert.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <time.h>
+#include <unistd.h>
 #include <wayland-server-core.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_data_device.h>
@@ -10,8 +12,8 @@
 #include "types/wlr_seat.h"
 
 static void default_keyboard_enter(struct wlr_seat_keyboard_grab *grab,
-		struct wlr_surface *surface, uint32_t keycodes[], size_t num_keycodes,
-		struct wlr_keyboard_modifiers *modifiers) {
+		struct wlr_surface *surface, const uint32_t keycodes[], size_t num_keycodes,
+		const struct wlr_keyboard_modifiers *modifiers) {
 	wlr_seat_keyboard_enter(grab->seat, surface, keycodes, num_keycodes, modifiers);
 }
 
@@ -25,7 +27,7 @@ static void default_keyboard_key(struct wlr_seat_keyboard_grab *grab,
 }
 
 static void default_keyboard_modifiers(struct wlr_seat_keyboard_grab *grab,
-		struct wlr_keyboard_modifiers *modifiers) {
+		const struct wlr_keyboard_modifiers *modifiers) {
 	wlr_seat_keyboard_send_modifiers(grab->seat, modifiers);
 }
 
@@ -59,7 +61,6 @@ static struct wlr_seat_client *seat_client_from_keyboard_resource(
 }
 
 static void keyboard_handle_resource_destroy(struct wl_resource *resource) {
-	wl_list_remove(wl_resource_get_link(resource));
 	seat_client_destroy_keyboard(resource);
 }
 
@@ -192,7 +193,7 @@ static void seat_keyboard_handle_surface_destroy(struct wl_listener *listener,
 }
 
 void wlr_seat_keyboard_send_modifiers(struct wlr_seat *seat,
-		struct wlr_keyboard_modifiers *modifiers) {
+		const struct wlr_keyboard_modifiers *modifiers) {
 	struct wlr_seat_client *client = seat->keyboard_state.focused_client;
 	if (client == NULL) {
 		return;
@@ -228,8 +229,8 @@ void seat_client_send_keyboard_leave_raw(struct wlr_seat_client *seat_client,
 }
 
 void wlr_seat_keyboard_enter(struct wlr_seat *seat,
-		struct wlr_surface *surface, uint32_t keycodes[], size_t num_keycodes,
-		struct wlr_keyboard_modifiers *modifiers) {
+		struct wlr_surface *surface, const uint32_t keycodes[], size_t num_keycodes,
+		const struct wlr_keyboard_modifiers *modifiers) {
 	if (seat->keyboard_state.focused_surface == surface) {
 		// this surface already got an enter notify
 		return;
@@ -254,17 +255,10 @@ void wlr_seat_keyboard_enter(struct wlr_seat *seat,
 
 	// enter the current surface
 	if (client != NULL) {
-		struct wl_array keys;
-		wl_array_init(&keys);
-		for (size_t i = 0; i < num_keycodes; ++i) {
-			uint32_t *p = wl_array_add(&keys, sizeof(uint32_t));
-			if (!p) {
-				wlr_log(WLR_ERROR, "Cannot allocate memory, skipping keycode: %" PRIu32 "\n",
-					keycodes[i]);
-				continue;
-			}
-			*p = keycodes[i];
-		}
+		struct wl_array keys = {
+			.data = (void *)keycodes,
+			.size = num_keycodes * sizeof(keycodes[0]),
+		};
 		uint32_t serial = wlr_seat_client_next_serial(client);
 		struct wl_resource *resource;
 		wl_resource_for_each(resource, &client->keyboards) {
@@ -273,7 +267,6 @@ void wlr_seat_keyboard_enter(struct wlr_seat *seat,
 			}
 			wl_keyboard_send_enter(resource, serial, surface->resource, &keys);
 		}
-		wl_array_release(&keys);
 	}
 
 	// reinitialize the focus destroy events
@@ -306,8 +299,8 @@ void wlr_seat_keyboard_enter(struct wlr_seat *seat,
 }
 
 void wlr_seat_keyboard_notify_enter(struct wlr_seat *seat,
-		struct wlr_surface *surface, uint32_t keycodes[], size_t num_keycodes,
-		struct wlr_keyboard_modifiers *modifiers) {
+		struct wlr_surface *surface, const uint32_t keycodes[], size_t num_keycodes,
+		const struct wlr_keyboard_modifiers *modifiers) {
 	// NULL surfaces are prohibited in the grab-compatible API. Use
 	// wlr_seat_keyboard_notify_clear_focus() instead.
 	assert(surface);
@@ -329,7 +322,7 @@ bool wlr_seat_keyboard_has_grab(struct wlr_seat *seat) {
 }
 
 void wlr_seat_keyboard_notify_modifiers(struct wlr_seat *seat,
-		struct wlr_keyboard_modifiers *modifiers) {
+		const struct wlr_keyboard_modifiers *modifiers) {
 	clock_gettime(CLOCK_MONOTONIC, &seat->last_event);
 	struct wlr_seat_keyboard_grab *grab = seat->keyboard_state.grab;
 	grab->interface->modifiers(grab, modifiers);
@@ -349,6 +342,24 @@ static void seat_client_send_keymap(struct wlr_seat_client *client,
 		return;
 	}
 
+	enum wl_keyboard_keymap_format format;
+	int fd, devnull = -1;
+	uint32_t size;
+	if (keyboard->keymap != NULL) {
+		format = WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1;
+		fd = keyboard->keymap_fd;
+		size = keyboard->keymap_size;
+	} else {
+		format = WL_KEYBOARD_KEYMAP_FORMAT_NO_KEYMAP;
+		devnull = open("/dev/null", O_RDONLY | O_CLOEXEC);
+		if (devnull < 0) {
+			wlr_log_errno(WLR_ERROR, "Failed to open /dev/null");
+			return;
+		}
+		fd = devnull;
+		size = 0;
+	}
+
 	// TODO: We should probably lift all of the keys set by the other
 	// keyboard
 	struct wl_resource *resource;
@@ -357,8 +368,11 @@ static void seat_client_send_keymap(struct wlr_seat_client *client,
 			continue;
 		}
 
-		wl_keyboard_send_keymap(resource, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,
-			keyboard->keymap_fd, keyboard->keymap_size);
+		wl_keyboard_send_keymap(resource, format, fd, size);
+	}
+
+	if (devnull >= 0) {
+		close(devnull);
 	}
 }
 
@@ -447,11 +461,19 @@ void seat_client_create_keyboard(struct wlr_seat_client *seat_client,
 	}
 }
 
-void seat_client_destroy_keyboard(struct wl_resource *resource) {
-	struct wlr_seat_client *seat_client =
-		seat_client_from_keyboard_resource(resource);
-	if (seat_client == NULL) {
+void seat_client_create_inert_keyboard(struct wl_client *client,
+		uint32_t version, uint32_t id) {
+	struct wl_resource *resource =
+		wl_resource_create(client, &wl_keyboard_interface, version, id);
+	if (!resource) {
+		wl_client_post_no_memory(client);
 		return;
 	}
+	wl_resource_set_implementation(resource, &keyboard_impl, NULL, NULL);
+}
+
+void seat_client_destroy_keyboard(struct wl_resource *resource) {
+	wl_list_remove(wl_resource_get_link(resource));
+	wl_list_init(wl_resource_get_link(resource));
 	wl_resource_set_user_data(resource, NULL);
 }

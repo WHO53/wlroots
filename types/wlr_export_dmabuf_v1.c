@@ -4,7 +4,6 @@
 #include <wlr/interfaces/wlr_output.h>
 #include <wlr/render/dmabuf.h>
 #include <wlr/types/wlr_export_dmabuf_v1.h>
-#include <wlr/types/wlr_output.h>
 #include <wlr/util/log.h>
 #include "wlr-export-dmabuf-unstable-v1-protocol.h"
 
@@ -41,6 +40,7 @@ static void frame_destroy(struct wlr_export_dmabuf_frame_v1 *frame) {
 	}
 	wl_list_remove(&frame->link);
 	wl_list_remove(&frame->output_commit.link);
+	wl_list_remove(&frame->output_destroy.link);
 	// Make the frame resource inert
 	wl_resource_set_user_data(frame->resource, NULL);
 	free(frame);
@@ -57,7 +57,7 @@ static void frame_output_handle_commit(struct wl_listener *listener,
 		wl_container_of(listener, frame, output_commit);
 	struct wlr_output_event_commit *event = data;
 
-	if (!(event->committed & WLR_OUTPUT_STATE_BUFFER)) {
+	if (!(event->state->committed & WLR_OUTPUT_STATE_BUFFER)) {
 		return;
 	}
 
@@ -65,7 +65,7 @@ static void frame_output_handle_commit(struct wl_listener *listener,
 	wl_list_init(&frame->output_commit.link);
 
 	struct wlr_dmabuf_attributes attribs = {0};
-	if (!wlr_buffer_get_dmabuf(event->buffer, &attribs)) {
+	if (!wlr_buffer_get_dmabuf(event->state->buffer, &attribs)) {
 		zwlr_export_dmabuf_frame_v1_send_cancel(frame->resource,
 			ZWLR_EXPORT_DMABUF_FRAME_V1_CANCEL_REASON_TEMPORARY);
 		frame_destroy(frame);
@@ -93,6 +93,11 @@ static void frame_output_handle_commit(struct wl_listener *listener,
 	frame_destroy(frame);
 }
 
+static void frame_output_handle_destroy(struct wl_listener *listener, void *data) {
+	struct wlr_export_dmabuf_frame_v1 *frame = wl_container_of(listener, frame, output_destroy);
+	frame_destroy(frame);
+}
+
 
 static const struct zwlr_export_dmabuf_manager_v1_interface manager_impl;
 
@@ -110,14 +115,14 @@ static void manager_handle_capture_output(struct wl_client *client,
 		manager_from_resource(manager_resource);
 	struct wlr_output *output = wlr_output_from_resource(output_resource);
 
-	struct wlr_export_dmabuf_frame_v1 *frame =
-		calloc(1, sizeof(struct wlr_export_dmabuf_frame_v1));
+	struct wlr_export_dmabuf_frame_v1 *frame = calloc(1, sizeof(*frame));
 	if (frame == NULL) {
 		wl_resource_post_no_memory(manager_resource);
 		return;
 	}
 	frame->manager = manager;
 	wl_list_init(&frame->output_commit.link);
+	wl_list_init(&frame->output_destroy.link);
 
 	uint32_t version = wl_resource_get_version(manager_resource);
 	frame->resource = wl_resource_create(client,
@@ -150,8 +155,13 @@ static void manager_handle_capture_output(struct wl_client *client,
 	wl_list_remove(&frame->output_commit.link);
 	wl_signal_add(&output->events.commit, &frame->output_commit);
 	frame->output_commit.notify = frame_output_handle_commit;
+	wl_signal_add(&output->events.destroy, &frame->output_destroy);
+	frame->output_destroy.notify = frame_output_handle_destroy;
 
-	wlr_output_schedule_frame(output);
+	// Request a frame because we can't assume that the current front buffer is still usable. It may
+	// have been released already, and we shouldn't lock it here because compositors want to render
+	// into the least damaged buffer.
+	wlr_output_update_needs_frame(output);
 }
 
 static void manager_handle_destroy(struct wl_client *client,
@@ -189,8 +199,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 
 struct wlr_export_dmabuf_manager_v1 *wlr_export_dmabuf_manager_v1_create(
 		struct wl_display *display) {
-	struct wlr_export_dmabuf_manager_v1 *manager =
-		calloc(1, sizeof(struct wlr_export_dmabuf_manager_v1));
+	struct wlr_export_dmabuf_manager_v1 *manager = calloc(1, sizeof(*manager));
 	if (manager == NULL) {
 		return NULL;
 	}

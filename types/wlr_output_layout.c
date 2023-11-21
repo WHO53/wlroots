@@ -7,21 +7,10 @@
 #include <wlr/util/box.h>
 #include <wlr/util/log.h>
 
-struct wlr_output_layout_output_state {
-	struct wlr_output_layout *layout;
-	struct wlr_output_layout_output *l_output;
-
-	bool auto_configured;
-
-	struct wl_listener mode;
-	struct wl_listener commit;
-};
-
 static const struct wlr_addon_interface addon_impl;
 
 struct wlr_output_layout *wlr_output_layout_create(void) {
-	struct wlr_output_layout *layout =
-		calloc(1, sizeof(struct wlr_output_layout));
+	struct wlr_output_layout *layout = calloc(1, sizeof(*layout));
 	if (layout == NULL) {
 		return NULL;
 	}
@@ -38,11 +27,9 @@ static void output_layout_output_destroy(
 		struct wlr_output_layout_output *l_output) {
 	wl_signal_emit_mutable(&l_output->events.destroy, l_output);
 	wlr_output_destroy_global(l_output->output);
-	wl_list_remove(&l_output->state->mode.link);
-	wl_list_remove(&l_output->state->commit.link);
+	wl_list_remove(&l_output->commit.link);
 	wl_list_remove(&l_output->link);
 	wlr_addon_finish(&l_output->addon);
-	free(l_output->state);
 	free(l_output);
 }
 
@@ -87,7 +74,7 @@ static void output_layout_reconfigure(struct wlr_output_layout *layout) {
 	struct wlr_box output_box;
 
 	wl_list_for_each(l_output, &layout->outputs, link) {
-		if (l_output->state->auto_configured) {
+		if (l_output->auto_configured) {
 			continue;
 		}
 
@@ -105,7 +92,7 @@ static void output_layout_reconfigure(struct wlr_output_layout *layout) {
 	}
 
 	wl_list_for_each(l_output, &layout->outputs, link) {
-		if (!l_output->state->auto_configured) {
+		if (!l_output->auto_configured) {
 			continue;
 		}
 		output_layout_output_get_box(l_output, &output_box);
@@ -126,20 +113,16 @@ static void output_update_global(struct wlr_output *output) {
 	}
 }
 
-static void handle_output_mode(struct wl_listener *listener, void *data) {
-	struct wlr_output_layout_output_state *state =
-		wl_container_of(listener, state, mode);
-	output_layout_reconfigure(state->layout);
-	output_update_global(state->l_output->output);
-}
-
 static void handle_output_commit(struct wl_listener *listener, void *data) {
-	struct wlr_output_layout_output_state *state =
-		wl_container_of(listener, state, commit);
+	struct wlr_output_layout_output *l_output =
+		wl_container_of(listener, l_output, commit);
 	struct wlr_output_event_commit *event = data;
 
-	if (event->committed & (WLR_OUTPUT_STATE_SCALE | WLR_OUTPUT_STATE_TRANSFORM)) {
-		output_layout_reconfigure(state->layout);
+	if (event->state->committed & (WLR_OUTPUT_STATE_SCALE |
+			WLR_OUTPUT_STATE_TRANSFORM |
+			WLR_OUTPUT_STATE_MODE)) {
+		output_layout_reconfigure(l_output->layout);
+		output_update_global(l_output->output);
 	}
 }
 
@@ -147,7 +130,7 @@ static void addon_destroy(struct wlr_addon *addon) {
 	assert(addon->impl == &addon_impl);
 	struct wlr_output_layout_output *l_output =
 		wl_container_of(addon, l_output, addon);
-	struct wlr_output_layout *layout = l_output->state->layout;
+	struct wlr_output_layout *layout = l_output->layout;
 	output_layout_output_destroy(l_output);
 	output_layout_reconfigure(layout);
 }
@@ -159,18 +142,11 @@ static const struct wlr_addon_interface addon_impl = {
 
 static struct wlr_output_layout_output *output_layout_output_create(
 		struct wlr_output_layout *layout, struct wlr_output *output) {
-	struct wlr_output_layout_output *l_output =
-		calloc(1, sizeof(struct wlr_output_layout_output));
+	struct wlr_output_layout_output *l_output = calloc(1, sizeof(*l_output));
 	if (l_output == NULL) {
 		return NULL;
 	}
-	l_output->state = calloc(1, sizeof(struct wlr_output_layout_output_state));
-	if (l_output->state == NULL) {
-		free(l_output);
-		return NULL;
-	}
-	l_output->state->l_output = l_output;
-	l_output->state->layout = layout;
+	l_output->layout = layout;
 	l_output->output = output;
 	wl_signal_init(&l_output->events.destroy);
 
@@ -180,37 +156,58 @@ static struct wlr_output_layout_output *output_layout_output_create(
 	 */
 	wl_list_insert(layout->outputs.prev, &l_output->link);
 
-	wl_signal_add(&output->events.mode, &l_output->state->mode);
-	l_output->state->mode.notify = handle_output_mode;
-	wl_signal_add(&output->events.commit, &l_output->state->commit);
-	l_output->state->commit.notify = handle_output_commit;
+	wl_signal_add(&output->events.commit, &l_output->commit);
+	l_output->commit.notify = handle_output_commit;
 
 	wlr_addon_init(&l_output->addon, &output->addons, layout, &addon_impl);
 
 	return l_output;
 }
 
-void wlr_output_layout_add(struct wlr_output_layout *layout,
-		struct wlr_output *output, int lx, int ly) {
+static struct wlr_output_layout_output *output_layout_add(struct wlr_output_layout *layout,
+		struct wlr_output *output, int lx, int ly,
+		bool auto_configured) {
 	struct wlr_output_layout_output *l_output =
 		wlr_output_layout_get(layout, output);
 	bool is_new = l_output == NULL;
-	if (!l_output) {
+	if (is_new) {
 		l_output = output_layout_output_create(layout, output);
-		if (!l_output) {
-			wlr_log(WLR_ERROR, "Failed to create wlr_output_layout_output");
-			return;
+		if (l_output == NULL) {
+			return NULL;
 		}
 	}
 
 	l_output->x = lx;
 	l_output->y = ly;
-	l_output->state->auto_configured = false;
+	l_output->auto_configured = auto_configured;
+
 	output_layout_reconfigure(layout);
 	output_update_global(output);
 
 	if (is_new) {
 		wl_signal_emit_mutable(&layout->events.add, l_output);
+	}
+
+	return l_output;
+}
+
+struct wlr_output_layout_output *wlr_output_layout_add(struct wlr_output_layout *layout,
+		struct wlr_output *output, int lx, int ly) {
+	return output_layout_add(layout, output, lx, ly, false);
+}
+
+struct wlr_output_layout_output *wlr_output_layout_add_auto(struct wlr_output_layout *layout,
+		struct wlr_output *output) {
+	return output_layout_add(layout, output, 0, 0, true);
+}
+
+void wlr_output_layout_remove(struct wlr_output_layout *layout,
+		struct wlr_output *output) {
+	struct wlr_output_layout_output *l_output =
+		wlr_output_layout_get(layout, output);
+	if (l_output != NULL) {
+		output_layout_output_destroy(l_output);
+		output_layout_reconfigure(layout);
 	}
 }
 
@@ -281,30 +278,6 @@ struct wlr_output *wlr_output_layout_output_at(struct wlr_output_layout *layout,
 	return NULL;
 }
 
-void wlr_output_layout_move(struct wlr_output_layout *layout,
-		struct wlr_output *output, int lx, int ly) {
-	struct wlr_output_layout_output *l_output =
-		wlr_output_layout_get(layout, output);
-	if (l_output) {
-		l_output->x = lx;
-		l_output->y = ly;
-		l_output->state->auto_configured = false;
-		output_layout_reconfigure(layout);
-	} else {
-		wlr_log(WLR_ERROR, "output not found in this layout: %s", output->name);
-	}
-}
-
-void wlr_output_layout_remove(struct wlr_output_layout *layout,
-		struct wlr_output *output) {
-	struct wlr_output_layout_output *l_output =
-		wlr_output_layout_get(layout, output);
-	if (l_output) {
-		output_layout_output_destroy(l_output);
-		output_layout_reconfigure(layout);
-	}
-}
-
 void wlr_output_layout_output_coords(struct wlr_output_layout *layout,
 		struct wlr_output *reference, double *lx, double *ly) {
 	assert(layout && reference);
@@ -328,7 +301,7 @@ void wlr_output_layout_closest_point(struct wlr_output_layout *layout,
 		return;
 	}
 
-	double min_x = 0, min_y = 0, min_distance = DBL_MAX;
+	double min_x = lx, min_y = ly, min_distance = DBL_MAX;
 	struct wlr_output_layout_output *l_output;
 	wl_list_for_each(l_output, &layout->outputs, link) {
 		if (reference != NULL && reference != l_output->output) {
@@ -365,7 +338,7 @@ void wlr_output_layout_closest_point(struct wlr_output_layout *layout,
 
 void wlr_output_layout_get_box(struct wlr_output_layout *layout,
 		struct wlr_output *reference, struct wlr_box *dest_box) {
-	memset(dest_box, 0, sizeof(*dest_box));
+	*dest_box = (struct wlr_box){0};
 
 	struct wlr_output_layout_output *l_output;
 	if (reference) {
@@ -403,28 +376,6 @@ void wlr_output_layout_get_box(struct wlr_output_layout *layout,
 		dest_box->y = min_y;
 		dest_box->width = max_x - min_x;
 		dest_box->height = max_y - min_y;
-	}
-}
-
-void wlr_output_layout_add_auto(struct wlr_output_layout *layout,
-		struct wlr_output *output) {
-	struct wlr_output_layout_output *l_output =
-		wlr_output_layout_get(layout, output);
-	bool is_new = l_output == NULL;
-	if (!l_output) {
-		l_output = output_layout_output_create(layout, output);
-		if (!l_output) {
-			wlr_log(WLR_ERROR, "Failed to create wlr_output_layout_output");
-			return;
-		}
-	}
-
-	l_output->state->auto_configured = true;
-	output_layout_reconfigure(layout);
-	output_update_global(output);
-
-	if (is_new) {
-		wl_signal_emit_mutable(&layout->events.add, l_output);
 	}
 }
 

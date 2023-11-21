@@ -8,7 +8,7 @@
 void wlr_box_closest_point(const struct wlr_box *box, double x, double y,
 		double *dest_x, double *dest_y) {
 	// if box is empty, then it contains no points, so no closest point either
-	if (box->width <= 0 || box->height <= 0) {
+	if (wlr_box_empty(box)) {
 		*dest_x = NAN;
 		*dest_y = NAN;
 		return;
@@ -43,10 +43,7 @@ bool wlr_box_intersection(struct wlr_box *dest, const struct wlr_box *box_a,
 	bool b_empty = wlr_box_empty(box_b);
 
 	if (a_empty || b_empty) {
-		dest->x = 0;
-		dest->y = 0;
-		dest->width = -100;
-		dest->height = -100;
+		*dest = (struct wlr_box){0};
 		return false;
 	}
 
@@ -74,7 +71,10 @@ bool wlr_box_contains_point(const struct wlr_box *box, double x, double y) {
 
 void wlr_box_transform(struct wlr_box *dest, const struct wlr_box *box,
 		enum wl_output_transform transform, int width, int height) {
-	struct wlr_box src = *box;
+	struct wlr_box src = {0};
+	if (box != NULL) {
+		src = *box;
+	}
 
 	if (transform % 2 == 0) {
 		dest->width = src.width;
@@ -126,7 +126,10 @@ bool wlr_fbox_empty(const struct wlr_fbox *box) {
 
 void wlr_fbox_transform(struct wlr_fbox *dest, const struct wlr_fbox *box,
 		enum wl_output_transform transform, double width, double height) {
-	struct wlr_fbox src = *box;
+	struct wlr_fbox src = {0};
+	if (box != NULL) {
+		src = *box;
+	}
 
 	if (transform % 2 == 0) {
 		dest->width = src.width;
@@ -175,11 +178,33 @@ void wlr_fbox_transform(struct wlr_fbox *dest, const struct wlr_fbox *box,
 #ifdef WLR_USE_UNSTABLE
 
 bool wlr_box_equal(const struct wlr_box *a, const struct wlr_box *b) {
+	if (wlr_box_empty(a)) {
+		a = NULL;
+	}
+	if (wlr_box_empty(b)) {
+		b = NULL;
+	}
+
+	if (a == NULL || b == NULL) {
+		return a == b;
+	}
+
 	return a->x == b->x && a->y == b->y &&
 		a->width == b->width && a->height == b->height;
 }
 
 bool wlr_fbox_equal(const struct wlr_fbox *a, const struct wlr_fbox *b) {
+	if (wlr_fbox_empty(a)) {
+		a = NULL;
+	}
+	if (wlr_fbox_empty(b)) {
+		b = NULL;
+	}
+
+	if (a == NULL || b == NULL) {
+		return a == b;
+	}
+
 	return a->x == b->x && a->y == b->y &&
 		a->width == b->width && a->height == b->height;
 }

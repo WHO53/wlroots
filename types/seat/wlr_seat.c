@@ -16,56 +16,60 @@
 
 static void seat_handle_get_pointer(struct wl_client *client,
 		struct wl_resource *seat_resource, uint32_t id) {
+	uint32_t version = wl_resource_get_version(seat_resource);
 	struct wlr_seat_client *seat_client =
 		wlr_seat_client_from_resource(seat_resource);
+	if (!seat_client) {
+		// The client still needs a resource, so here's a dummy:
+		seat_client_create_inert_pointer(client, version, id);
+		return;
+	}
 	if (!(seat_client->seat->accumulated_capabilities & WL_SEAT_CAPABILITY_POINTER)) {
 		wl_resource_post_error(seat_resource, WL_SEAT_ERROR_MISSING_CAPABILITY,
 				"wl_seat.get_pointer called when no pointer capability has existed");
 		return;
 	}
 
-	uint32_t version = wl_resource_get_version(seat_resource);
 	seat_client_create_pointer(seat_client, version, id);
 }
 
 static void seat_handle_get_keyboard(struct wl_client *client,
 		struct wl_resource *seat_resource, uint32_t id) {
+	uint32_t version = wl_resource_get_version(seat_resource);
 	struct wlr_seat_client *seat_client =
 		wlr_seat_client_from_resource(seat_resource);
+	if (!seat_client) {
+		seat_client_create_inert_keyboard(client, version, id);
+		return;
+	}
 	if (!(seat_client->seat->accumulated_capabilities & WL_SEAT_CAPABILITY_KEYBOARD)) {
 		wl_resource_post_error(seat_resource, WL_SEAT_ERROR_MISSING_CAPABILITY,
 				"wl_seat.get_keyboard called when no keyboard capability has existed");
 		return;
 	}
 
-	uint32_t version = wl_resource_get_version(seat_resource);
 	seat_client_create_keyboard(seat_client, version, id);
 }
 
 static void seat_handle_get_touch(struct wl_client *client,
 		struct wl_resource *seat_resource, uint32_t id) {
+	uint32_t version = wl_resource_get_version(seat_resource);
 	struct wlr_seat_client *seat_client =
 		wlr_seat_client_from_resource(seat_resource);
+	if (!seat_client) {
+		seat_client_create_inert_touch(client, version, id);
+		return;
+	}
 	if (!(seat_client->seat->accumulated_capabilities & WL_SEAT_CAPABILITY_TOUCH)) {
 		wl_resource_post_error(seat_resource, WL_SEAT_ERROR_MISSING_CAPABILITY,
 				"wl_seat.get_touch called when no touch capability has existed");
 		return;
 	}
 
-	uint32_t version = wl_resource_get_version(seat_resource);
 	seat_client_create_touch(seat_client, version, id);
 }
 
-static void seat_client_handle_resource_destroy(
-		struct wl_resource *seat_resource) {
-	struct wlr_seat_client *client =
-		wlr_seat_client_from_resource(seat_resource);
-
-	wl_list_remove(wl_resource_get_link(seat_resource));
-	if (!wl_list_empty(&client->resources)) {
-		return;
-	}
-
+static void seat_client_destroy(struct wlr_seat_client *client) {
 	wl_signal_emit_mutable(&client->events.destroy, client);
 
 	if (client == client->seat->pointer_state.focused_client) {
@@ -81,25 +85,45 @@ static void seat_client_handle_resource_destroy(
 
 	struct wl_resource *resource, *tmp;
 	wl_resource_for_each_safe(resource, tmp, &client->pointers) {
-		wl_resource_destroy(resource);
+		seat_client_destroy_pointer(resource);
 	}
 	wl_resource_for_each_safe(resource, tmp, &client->keyboards) {
-		wl_resource_destroy(resource);
+		seat_client_destroy_keyboard(resource);
 	}
 	wl_resource_for_each_safe(resource, tmp, &client->touches) {
-		wl_resource_destroy(resource);
+		seat_client_destroy_touch(resource);
 	}
 	wl_resource_for_each_safe(resource, tmp, &client->data_devices) {
 		// Make the data device inert
+		wl_list_remove(wl_resource_get_link(resource));
+		wl_list_init(wl_resource_get_link(resource));
 		wl_resource_set_user_data(resource, NULL);
-
-		struct wl_list *link = wl_resource_get_link(resource);
-		wl_list_remove(link);
-		wl_list_init(link);
+	}
+	wl_resource_for_each_safe(resource, tmp, &client->resources) {
+		// Make the seat resource inert
+		wl_list_remove(wl_resource_get_link(resource));
+		wl_list_init(wl_resource_get_link(resource));
+		wl_resource_set_user_data(resource, NULL);
 	}
 
 	wl_list_remove(&client->link);
 	free(client);
+}
+
+static void seat_client_handle_resource_destroy(
+		struct wl_resource *seat_resource) {
+	struct wlr_seat_client *client =
+		wlr_seat_client_from_resource(seat_resource);
+	if (!client) {
+		return;
+	}
+
+	wl_list_remove(wl_resource_get_link(seat_resource));
+	if (!wl_list_empty(&client->resources)) {
+		return;
+	}
+
+	seat_client_destroy(client);
 }
 
 static void seat_handle_release(struct wl_client *client,
@@ -114,10 +138,45 @@ static const struct wl_seat_interface seat_impl = {
 	.release = seat_handle_release,
 };
 
+static struct wlr_seat_client *seat_client_create(struct wlr_seat *wlr_seat,
+		struct wl_client *client, struct wl_resource *wl_resource) {
+	struct wlr_seat_client *seat_client = calloc(1, sizeof(*seat_client));
+	if (!seat_client) {
+		return NULL;
+	}
+
+	seat_client->client = client;
+	seat_client->seat = wlr_seat;
+	wl_list_init(&seat_client->resources);
+	wl_list_init(&seat_client->pointers);
+	wl_list_init(&seat_client->keyboards);
+	wl_list_init(&seat_client->touches);
+	wl_list_init(&seat_client->data_devices);
+	wl_signal_init(&seat_client->events.destroy);
+
+	wl_list_insert(&wlr_seat->clients, &seat_client->link);
+
+	struct wlr_surface *pointer_focus =
+		wlr_seat->pointer_state.focused_surface;
+	if (pointer_focus != NULL &&
+			wl_resource_get_client(pointer_focus->resource) == client) {
+		wlr_seat->pointer_state.focused_client = seat_client;
+	}
+
+	struct wlr_surface *keyboard_focus =
+		wlr_seat->keyboard_state.focused_surface;
+	if (keyboard_focus != NULL &&
+			wl_resource_get_client(keyboard_focus->resource) == client) {
+		wlr_seat->keyboard_state.focused_client = seat_client;
+	}
+
+	return seat_client;
+}
+
 static void seat_handle_bind(struct wl_client *client, void *_wlr_seat,
 		uint32_t version, uint32_t id) {
+	// `wlr_seat` can be NULL if the seat global is being destroyed
 	struct wlr_seat *wlr_seat = _wlr_seat;
-	assert(client && wlr_seat);
 
 	struct wl_resource *wl_resource =
 		wl_resource_create(client, &wl_seat_interface, version, id);
@@ -125,45 +184,26 @@ static void seat_handle_bind(struct wl_client *client, void *_wlr_seat,
 		wl_client_post_no_memory(client);
 		return;
 	}
+	wl_resource_set_implementation(wl_resource, &seat_impl, NULL,
+		seat_client_handle_resource_destroy);
+	wl_list_init(wl_resource_get_link(wl_resource));
+	if (wlr_seat == NULL) {
+		return;
+	}
 
 	struct wlr_seat_client *seat_client =
 		wlr_seat_client_for_wl_client(wlr_seat, client);
-	if (seat_client == NULL) {
-		seat_client = calloc(1, sizeof(struct wlr_seat_client));
-		if (seat_client == NULL) {
-			wl_resource_destroy(wl_resource);
-			wl_client_post_no_memory(client);
-			return;
-		}
-
-		seat_client->client = client;
-		seat_client->seat = wlr_seat;
-		wl_list_init(&seat_client->resources);
-		wl_list_init(&seat_client->pointers);
-		wl_list_init(&seat_client->keyboards);
-		wl_list_init(&seat_client->touches);
-		wl_list_init(&seat_client->data_devices);
-		wl_signal_init(&seat_client->events.destroy);
-
-		wl_list_insert(&wlr_seat->clients, &seat_client->link);
-
-		struct wlr_surface *pointer_focus =
-			wlr_seat->pointer_state.focused_surface;
-		if (pointer_focus != NULL &&
-				wl_resource_get_client(pointer_focus->resource) == client) {
-			wlr_seat->pointer_state.focused_client = seat_client;
-		}
-
-		struct wlr_surface *keyboard_focus =
-			wlr_seat->keyboard_state.focused_surface;
-		if (keyboard_focus != NULL &&
-				wl_resource_get_client(keyboard_focus->resource) == client) {
-			wlr_seat->keyboard_state.focused_client = seat_client;
-		}
+	if (!seat_client) {
+		seat_client = seat_client_create(wlr_seat, client, wl_resource);
 	}
 
-	wl_resource_set_implementation(wl_resource, &seat_impl,
-		seat_client, seat_client_handle_resource_destroy);
+	if (seat_client == NULL) {
+		wl_resource_destroy(wl_resource);
+		wl_client_post_no_memory(client);
+		return;
+	}
+
+	wl_resource_set_user_data(wl_resource, seat_client);
 	wl_list_insert(&seat_client->resources, wl_resource_get_link(wl_resource));
 	if (version >= WL_SEAT_NAME_SINCE_VERSION) {
 		wl_seat_send_name(wl_resource, wlr_seat->name);
@@ -195,19 +235,7 @@ void wlr_seat_destroy(struct wlr_seat *seat) {
 
 	struct wlr_seat_client *client, *tmp;
 	wl_list_for_each_safe(client, tmp, &seat->clients, link) {
-		struct wl_resource *resource, *next;
-		/* wl_resource_for_each_safe isn't safe to use here, because the last
-		 * wl_resource_destroy will also destroy the head we cannot do the last
-		 * 'next' update that usually is harmless here.
-		 * Work around this by breaking one step ahead
-		 */
-		wl_resource_for_each_safe(resource, next, &client->resources) {
-			// will destroy other resources as well
-			wl_resource_destroy(resource);
-			if (wl_resource_get_link(next) == &client->resources) {
-				break;
-			}
-		}
+		seat_client_destroy(client);
 	}
 
 	wlr_global_destroy_safe(seat->global);
@@ -225,7 +253,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 }
 
 struct wlr_seat *wlr_seat_create(struct wl_display *display, const char *name) {
-	struct wlr_seat *seat = calloc(1, sizeof(struct wlr_seat));
+	struct wlr_seat *seat = calloc(1, sizeof(*seat));
 	if (!seat) {
 		return NULL;
 	}
@@ -234,8 +262,7 @@ struct wlr_seat *wlr_seat_create(struct wl_display *display, const char *name) {
 	seat->pointer_state.seat = seat;
 	wl_list_init(&seat->pointer_state.surface_destroy.link);
 
-	struct wlr_seat_pointer_grab *pointer_grab =
-		calloc(1, sizeof(struct wlr_seat_pointer_grab));
+	struct wlr_seat_pointer_grab *pointer_grab = calloc(1, sizeof(*pointer_grab));
 	if (!pointer_grab) {
 		free(seat);
 		return NULL;
@@ -248,8 +275,7 @@ struct wlr_seat *wlr_seat_create(struct wl_display *display, const char *name) {
 	wl_signal_init(&seat->pointer_state.events.focus_change);
 
 	// keyboard state
-	struct wlr_seat_keyboard_grab *keyboard_grab =
-		calloc(1, sizeof(struct wlr_seat_keyboard_grab));
+	struct wlr_seat_keyboard_grab *keyboard_grab = calloc(1, sizeof(*keyboard_grab));
 	if (!keyboard_grab) {
 		free(pointer_grab);
 		free(seat);
@@ -266,8 +292,7 @@ struct wlr_seat *wlr_seat_create(struct wl_display *display, const char *name) {
 	wl_signal_init(&seat->keyboard_state.events.focus_change);
 
 	// touch state
-	struct wlr_seat_touch_grab *touch_grab =
-		calloc(1, sizeof(struct wlr_seat_touch_grab));
+	struct wlr_seat_touch_grab *touch_grab = calloc(1, sizeof(*touch_grab));
 	if (!touch_grab) {
 		free(pointer_grab);
 		free(keyboard_grab);
@@ -416,13 +441,6 @@ struct wlr_seat_client *wlr_seat_client_from_resource(
 	assert(wl_resource_instance_of(resource, &wl_seat_interface,
 		&seat_impl));
 	return wl_resource_get_user_data(resource);
-}
-
-bool wlr_seat_validate_grab_serial(struct wlr_seat *seat, uint32_t serial) {
-	// TODO
-	//return serial == seat->pointer_state.grab_serial ||
-	//	serial == seat->touch_state.grab_serial;
-	return true;
 }
 
 uint32_t wlr_seat_client_next_serial(struct wlr_seat_client *client) {

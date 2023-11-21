@@ -101,12 +101,22 @@ static void output_frame_notify(struct wl_listener *listener, void *data) {
 	struct wlr_renderer *renderer = state->renderer;
 	assert(renderer);
 
-	wlr_output_attach_render(wlr_output, NULL);
-	wlr_renderer_begin(renderer, wlr_output->width, wlr_output->height);
-	wlr_renderer_clear(renderer, state->clear_color);
-	wlr_output_render_software_cursors(wlr_output, NULL);
-	wlr_renderer_end(renderer);
-	wlr_output_commit(wlr_output);
+	struct wlr_output_state output_state;
+	wlr_output_state_init(&output_state);
+	struct wlr_render_pass *pass = wlr_output_begin_render_pass(wlr_output, &output_state, NULL, NULL);
+	wlr_render_pass_add_rect(pass, &(struct wlr_render_rect_options){
+		.box = { .width = wlr_output->width, .height = wlr_output->height },
+		.color = {
+			state->clear_color[0],
+			state->clear_color[1],
+			state->clear_color[2],
+			state->clear_color[3],
+		},
+	});
+	wlr_output_add_software_cursors_to_render_pass(wlr_output, pass, NULL);
+	wlr_render_pass_submit(pass);
+	wlr_output_commit_state(wlr_output, &output_state);
+	wlr_output_state_finish(&output_state);
 }
 
 static void handle_cursor_motion(struct wl_listener *listener, void *data) {
@@ -184,7 +194,7 @@ static void handle_touch_up(struct wl_listener *listener, void *data) {
 static void handle_touch_down(struct wl_listener *listener, void *data) {
 	struct sample_state *sample = wl_container_of(listener, sample, touch_down);
 	struct wlr_touch_down_event  *event = data;
-	struct touch_point *point = calloc(1, sizeof(struct touch_point));
+	struct touch_point *point = calloc(1, sizeof(*point));
 	point->touch_id = event->touch_id;
 	point->x = event->x;
 	point->y = event->y;
@@ -256,7 +266,7 @@ static void new_output_notify(struct wl_listener *listener, void *data) {
 
 	wlr_output_init_render(output, sample->allocator, sample->renderer);
 
-	struct sample_output *sample_output = calloc(1, sizeof(struct sample_output));
+	struct sample_output *sample_output = calloc(1, sizeof(*sample_output));
 	sample_output->output = output;
 	sample_output->state = sample;
 	wl_signal_add(&output->events.frame, &sample_output->frame);
@@ -265,16 +275,15 @@ static void new_output_notify(struct wl_listener *listener, void *data) {
 	sample_output->destroy.notify = output_remove_notify;
 	wlr_output_layout_add_auto(sample->layout, sample_output->output);
 
-	wlr_xcursor_manager_load(sample->xcursor_manager, output->scale);
-	wlr_xcursor_manager_set_cursor_image(sample->xcursor_manager, "left_ptr",
-		sample->cursor);
-
+	struct wlr_output_state state;
+	wlr_output_state_init(&state);
+	wlr_output_state_set_enabled(&state, true);
 	struct wlr_output_mode *mode = wlr_output_preferred_mode(output);
 	if (mode != NULL) {
-		wlr_output_set_mode(output, mode);
+		wlr_output_state_set_mode(&state, mode);
 	}
-
-	wlr_output_commit(output);
+	wlr_output_commit_state(output, &state);
+	wlr_output_state_finish(&state);
 }
 
 
@@ -296,7 +305,7 @@ static void new_input_notify(struct wl_listener *listener, void *data) {
 		break;
 
 	case WLR_INPUT_DEVICE_KEYBOARD:;
-		struct sample_keyboard *keyboard = calloc(1, sizeof(struct sample_keyboard));
+		struct sample_keyboard *keyboard = calloc(1, sizeof(*keyboard));
 		keyboard->wlr_keyboard = wlr_keyboard_from_input_device(device);
 		keyboard->state = state;
 		wl_signal_add(&device->events.destroy, &keyboard->destroy);
@@ -333,7 +342,7 @@ int main(int argc, char *argv[]) {
 		.display = display
 	};
 
-	struct wlr_backend *wlr = wlr_backend_autocreate(display);
+	struct wlr_backend *wlr = wlr_backend_autocreate(display, NULL);
 	if (!wlr) {
 		exit(1);
 	}
@@ -386,14 +395,13 @@ int main(int argc, char *argv[]) {
 		&state.tablet_tool_axis);
 	state.tablet_tool_axis.notify = handle_tablet_tool_axis;
 
-	state.xcursor_manager = wlr_xcursor_manager_create("default", 24);
+	state.xcursor_manager = wlr_xcursor_manager_create(NULL, 24);
 	if (!state.xcursor_manager) {
-		wlr_log(WLR_ERROR, "Failed to load left_ptr cursor");
+		wlr_log(WLR_ERROR, "Failed to load default cursor");
 		return 1;
 	}
 
-	wlr_xcursor_manager_set_cursor_image(state.xcursor_manager, "left_ptr",
-		state.cursor);
+	wlr_cursor_set_xcursor(state.cursor, state.xcursor_manager, "default");
 
 	clock_gettime(CLOCK_MONOTONIC, &state.last_frame);
 
