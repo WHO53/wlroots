@@ -53,7 +53,7 @@ Architecture: any
 Multi-Arch: same
 Depends:
  ${misc:Depends},
- libwlroots11 (= ${binary:Version}),
+ libwlroots12 (= ${binary:Version}),
  libcap-dev,
  libdrm-dev,
  libegl-dev,
@@ -85,7 +85,7 @@ Description: Modular wayland compositor library - development headers
  .
  This package contains the development headers.
 
-Package: libwlroots11
+Package: libwlroots12
 Architecture: any
 Multi-Arch: same
 Depends:
