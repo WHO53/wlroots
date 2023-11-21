@@ -6,8 +6,6 @@ Build-Depends:
  debhelper-compat (= 13),
  glslang-tools,
  hwdata,
- libavformat-dev,
- libavcodec-dev,
  libcap-dev,
  libdrm-dev (>= 2.4.113),
  libegl-dev,
