@@ -1,8 +1,22 @@
-wlroots (0.17.0-1) UNRELEASED; urgency=medium
+wlroots (0.17.0-1~exp1) experimental; urgency=medium
 
   * New upstream release
+  * [965a0e9] New upstream release
+  * [c8cf0e8] Refresh patches.
+    We drop the client patch as wlroots doesn't ship these anymore and
+    refresh the anchor patch.
+  * [f0cb805] d/control: Drop libav deps.
+    Clients are no longer shipped.
+  * [89f88ab] d/control: Update build-deps for new upstream version
+  * [ce42ad3] Bump soname to 12
+  * [a5445d6] Update examples.
+    Client examples were moved to a separate repo
+  * [99dd42c] d/copyright: Update with wlroots contributors
+  * [0ca6cb2] d/tests: Update autopkgtest to new API
+  * [bbd56db] d/control: Update dependencies of dev package.
+    According to the shipped pc file
 
- -- Guido Günther <agx@sigxcpu.org>  Tue, 21 Nov 2023 18:31:31 +0100
+ -- Guido Günther <agx@sigxcpu.org>  Tue, 21 Nov 2023 19:26:36 +0100
 
 wlroots (0.16.2-3) unstable; urgency=medium
 
