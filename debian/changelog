@@ -1,8 +1,10 @@
-wlroots (0.17.1-1) UNRELEASED; urgency=medium
+wlroots (0.17.1-1) experimental; urgency=medium
 
   * New upstream release
+  * d/control: Drop superfluous version information
+    Thanks: Diederik de Haas
 
- -- Guido Günther <agx@sigxcpu.org>  Fri, 22 Dec 2023 15:26:08 +0100
+ -- Guido Günther <agx@sigxcpu.org>  Fri, 22 Dec 2023 15:32:00 +0100
 
 wlroots (0.17.0-1~exp1) experimental; urgency=medium
 
