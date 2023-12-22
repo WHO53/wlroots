@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <wayland-server-core.h>
 #include <wlr/types/wlr_cursor.h>
+#include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_output.h>
@@ -264,6 +265,16 @@ static struct wlr_cursor_device *get_cursor_device(struct wlr_cursor *cur,
 	return ret;
 }
 
+static void output_cursor_move(struct wlr_cursor_output_cursor *output_cursor) {
+	struct wlr_cursor *cur = output_cursor->cursor;
+
+	double output_x = cur->x, output_y = cur->y;
+	wlr_output_layout_output_coords(cur->state->layout,
+		output_cursor->output_cursor->output, &output_x, &output_y);
+	wlr_output_cursor_move(output_cursor->output_cursor,
+		output_x, output_y);
+}
+
 static void cursor_warp_unchecked(struct wlr_cursor *cur,
 		double lx, double ly) {
 	assert(cur->state->layout);
@@ -272,17 +283,13 @@ static void cursor_warp_unchecked(struct wlr_cursor *cur,
 		return;
 	}
 
-	struct wlr_cursor_output_cursor *output_cursor;
-	wl_list_for_each(output_cursor, &cur->state->output_cursors, link) {
-		double output_x = lx, output_y = ly;
-		wlr_output_layout_output_coords(cur->state->layout,
-			output_cursor->output_cursor->output, &output_x, &output_y);
-		wlr_output_cursor_move(output_cursor->output_cursor,
-			output_x, output_y);
-	}
-
 	cur->x = lx;
 	cur->y = ly;
+
+	struct wlr_cursor_output_cursor *output_cursor;
+	wl_list_for_each(output_cursor, &cur->state->output_cursors, link) {
+		output_cursor_move(output_cursor);
+	}
 }
 
 /**
@@ -545,6 +552,16 @@ static void cursor_output_cursor_update(struct wlr_cursor_output_cursor *output_
 		} else {
 			wlr_surface_send_leave(surface, output);
 		}
+
+		float scale = 1;
+		struct wlr_surface_output *surface_output;
+		wl_list_for_each(surface_output, &surface->current_outputs, link) {
+			if (surface_output->output->scale > scale) {
+				scale = surface_output->output->scale;
+			}
+		}
+		wlr_fractional_scale_v1_notify_scale(surface, scale);
+		wlr_surface_set_preferred_buffer_scale(surface, ceil(scale));
 	} else if (cur->state->xcursor_name != NULL) {
 		struct wlr_xcursor_manager *manager = cur->state->xcursor_manager;
 		const char *name = cur->state->xcursor_name;
@@ -1094,6 +1111,7 @@ static void layout_add(struct wlr_cursor_state *state,
 		&output_cursor->output_commit);
 	output_cursor->output_commit.notify = output_cursor_output_handle_output_commit;
 
+	output_cursor_move(output_cursor);
 	cursor_output_cursor_update(output_cursor);
 }
 
