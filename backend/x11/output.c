@@ -64,6 +64,10 @@ static bool output_set_custom_mode(struct wlr_output *wlr_output,
 	struct wlr_x11_output *output = get_x11_output_from_output(wlr_output);
 	struct wlr_x11_backend *x11 = output->x11;
 
+	if (width == output->win_width && height == output->win_height) {
+		return true;
+	}
+
 	const uint32_t values[] = { width, height };
 	xcb_void_cookie_t cookie = xcb_configure_window_checked(
 		x11->xcb, output->win,
@@ -76,6 +80,9 @@ static bool output_set_custom_mode(struct wlr_output *wlr_output,
 		free(error);
 		return false;
 	}
+
+	output->win_width = width;
+	output->win_height = height;
 
 	// Move the pointer to its new location
 	update_x11_pointer_position(output, output->x11->time);
@@ -114,6 +121,9 @@ static void output_destroy(struct wlr_output *wlr_output) {
 
 static bool output_test(struct wlr_output *wlr_output,
 		const struct wlr_output_state *state) {
+	struct wlr_x11_output *output = get_x11_output_from_output(wlr_output);
+	struct wlr_x11_backend *x11 = output->x11;
+
 	uint32_t unsupported = state->committed & ~SUPPORTED_OUTPUT_STATE;
 	if (unsupported != 0) {
 		wlr_log(WLR_DEBUG, "Unsupported output state fields: 0x%"PRIx32,
@@ -129,6 +139,22 @@ static bool output_test(struct wlr_output *wlr_output,
 	if (state->committed & WLR_OUTPUT_STATE_ADAPTIVE_SYNC_ENABLED) {
 		if (!state->adaptive_sync_enabled) {
 			wlr_log(WLR_DEBUG, "Disabling adaptive sync is not supported");
+			return false;
+		}
+	}
+
+	if (state->committed & WLR_OUTPUT_STATE_BUFFER) {
+		struct wlr_buffer *buffer = state->buffer;
+		struct wlr_dmabuf_attributes dmabuf_attrs;
+		struct wlr_shm_attributes shm_attrs;
+		uint32_t format = DRM_FORMAT_INVALID;
+		if (wlr_buffer_get_dmabuf(buffer, &dmabuf_attrs)) {
+			format = dmabuf_attrs.format;
+		} else if (wlr_buffer_get_shm(buffer, &shm_attrs)) {
+			format = shm_attrs.format;
+		}
+		if (format != x11->x11_format->drm) {
+			wlr_log(WLR_DEBUG, "Unsupported buffer format");
 			return false;
 		}
 	}
@@ -579,6 +605,9 @@ struct wlr_output *wlr_x11_output_create(struct wlr_backend *backend) {
 		x11->screen->root, 0, 0, wlr_output->width, wlr_output->height, 0,
 		XCB_WINDOW_CLASS_INPUT_OUTPUT, x11->visualid, mask, values);
 
+	output->win_width = wlr_output->width;
+	output->win_height = wlr_output->height;
+
 	struct {
 		xcb_input_event_mask_t head;
 		xcb_input_xi_event_mask_t mask;
@@ -639,6 +668,9 @@ void handle_x11_configure_notify(struct wlr_x11_output *output,
 			ev->width, ev->height);
 		return;
 	}
+
+	output->win_width = ev->width;
+	output->win_height = ev->height;
 
 	struct wlr_output_state state;
 	wlr_output_state_init(&state);
