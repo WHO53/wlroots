@@ -453,7 +453,7 @@ static bool drm_crtc_commit(struct wlr_drm_connector *conn,
 		if (state->primary_fb != NULL) {
 			crtc->primary->queued_fb = drm_fb_lock(state->primary_fb);
 		}
-		if (crtc->cursor != NULL) {
+		if (crtc->cursor != NULL && conn->cursor_pending_fb != NULL) {
 			drm_fb_move(&crtc->cursor->queued_fb, &conn->cursor_pending_fb);
 		}
 
@@ -463,6 +463,10 @@ static bool drm_crtc_commit(struct wlr_drm_connector *conn,
 		}
 
 		drm_connector_set_pending_page_flip(conn, page_flip);
+
+		if (state->base->committed & WLR_OUTPUT_STATE_MODE) {
+			conn->refresh = calculate_refresh_rate(&state->mode);
+		}
 	} else {
 		// The set_cursor() hook is a bit special: it's not really synchronized
 		// to commit() or test(). Once set_cursor() returns true, the new
@@ -1454,6 +1458,7 @@ static bool connect_drm_connector(struct wlr_drm_connector *wlr_conn,
 				wlr_conn->crtc->props.mode_id, &mode_id);
 
 			wlr_conn->crtc->mode_id = mode_id;
+			wlr_conn->refresh = calculate_refresh_rate(current_modeinfo);
 		}
 
 		wlr_log(WLR_INFO, "  %"PRId32"x%"PRId32" @ %.3f Hz %s",
@@ -1753,7 +1758,7 @@ static void handle_page_flip(int fd, unsigned seq,
 		.presented = drm->session->active,
 		.when = &present_time,
 		.seq = seq,
-		.refresh = mhz_to_nsec(conn->output.refresh),
+		.refresh = mhz_to_nsec(conn->refresh),
 		.flags = present_flags,
 	};
 	wlr_output_send_present(&conn->output, &present_event);
@@ -1801,16 +1806,10 @@ int wlr_drm_backend_get_non_master_fd(struct wlr_backend *backend) {
 	assert(backend);
 
 	struct wlr_drm_backend *drm = get_drm_backend_from_backend(backend);
-	char *path = drmGetDeviceNameFromFd2(drm->fd);
-	if (!path) {
-		wlr_log(WLR_ERROR, "Failed to get device name from DRM fd");
-		return -1;
-	}
+	int fd = open(drm->name, O_RDWR | O_CLOEXEC);
 
-	int fd = open(path, O_RDWR | O_CLOEXEC);
 	if (fd < 0) {
 		wlr_log_errno(WLR_ERROR, "Unable to clone DRM fd for client fd");
-		free(path);
 		return -1;
 	}
 
