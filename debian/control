@@ -2,7 +2,7 @@ Source: wlroots
 Priority: optional
 Maintainer: Sway and related packages team <team+swaywm@tracker.debian.org>
 Uploaders: Guido Günther <agx@sigxcpu.org>, Birger Schacht <birger@rantanplan.org>
-Build-Depends:
+Build-Depends: dpkg-dev (>= 1.22.5),
  debhelper-compat (= 13),
  glslang-tools,
  hwdata,
@@ -54,7 +54,7 @@ Architecture: any
 Multi-Arch: same
 Depends:
  ${misc:Depends},
- libwlroots12 (= ${binary:Version}),
+ libwlroots12t64 (= ${binary:Version}),
  libcap-dev,
  libdisplay-info-dev,
  libdrm-dev (>= 2.4.114),
@@ -91,7 +91,10 @@ Description: Modular wayland compositor library - development headers
  .
  This package contains the development headers.
 
-Package: libwlroots12
+Package: libwlroots12t64
+Provides: ${t64:Provides}
+Replaces: libwlroots12
+Breaks: libwlroots12 (<< ${source:Version})
 Architecture: any
 Multi-Arch: same
 Depends:
