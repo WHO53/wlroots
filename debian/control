@@ -39,7 +39,7 @@ Build-Depends: dpkg-dev (>= 1.22.5),
  libxkbcommon-dev,
  meson,
  pkgconf,
- wayland-protocols (>= 1.24),
+ wayland-protocols (>= 1.32),
  xwayland,
 Standards-Version: 4.6.2
 Section: libs
