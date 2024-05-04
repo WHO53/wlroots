@@ -1,8 +1,11 @@
-wlroots (0.17.3-1) UNRELEASED; urgency=medium
+wlroots (0.17.3-1) experimental; urgency=medium
 
+  * Upload to experimental
   * New upstream release
+  * [9c7b1f8] Drop gles2-Avoid-crash-when-glGetInteger64vEXT-is-missing.patch:
+    Applied upstream
 
- -- Guido Günther <agx@sigxcpu.org>  Sat, 04 May 2024 14:25:00 +0200
+ -- Guido Günther <agx@sigxcpu.org>  Sat, 04 May 2024 14:28:54 +0200
 
 wlroots (0.17.2-2) unstable; urgency=medium
 
