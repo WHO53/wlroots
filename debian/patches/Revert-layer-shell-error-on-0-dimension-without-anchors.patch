@@ -10,10 +10,10 @@ Revert this until phosh has a fixed release.
  1 file changed, 2 insertions(+)
 
 diff --git a/types/wlr_layer_shell_v1.c b/types/wlr_layer_shell_v1.c
-index 37256db..2c722a7 100644
+index fd19a67..eed3567 100644
 --- a/types/wlr_layer_shell_v1.c
 +++ b/types/wlr_layer_shell_v1.c
-@@ -335,6 +335,7 @@ static void layer_surface_role_commit(struct wlr_surface *wlr_surface) {
+@@ -341,6 +341,7 @@ static void layer_surface_role_commit(struct wlr_surface *wlr_surface) {
  		return;
  	}
  
@@ -21,7 +21,7 @@ index 37256db..2c722a7 100644
  	const uint32_t horiz = ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
  		ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
  	if (surface->pending.desired_width == 0 &&
-@@ -354,6 +355,7 @@ static void layer_surface_role_commit(struct wlr_surface *wlr_surface) {
+@@ -360,6 +361,7 @@ static void layer_surface_role_commit(struct wlr_surface *wlr_surface) {
  			"height 0 requested without setting top and bottom anchors");
  		return;
  	}
