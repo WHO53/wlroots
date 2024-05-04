@@ -1,3 +1,13 @@
+wlroots (0.17.2-2) unstable; urgency=medium
+
+  * Upload to unstable 
+  * Acknowledge NMU (Closes: #1063089)
+  * Use pkgconf
+  * Bump versions wayland-protocols dependency
+    Closes: #1029381, #1064497
+
+ -- Guido Günther <agx@sigxcpu.org>  Sat, 04 May 2024 09:31:44 +0200
+
 wlroots (0.17.2-1) experimental; urgency=medium
 
   * Upload to experimental to not disturb ongoing transitions
