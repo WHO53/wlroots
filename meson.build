@@ -105,6 +105,7 @@ features = {
 	'xwayland': false,
 	'gles2-renderer': false,
 	'vulkan-renderer': false,
+	'android-renderer': false,
 	'gbm-allocator': false,
 	'session': false,
 }
