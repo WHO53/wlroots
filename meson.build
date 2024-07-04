@@ -101,6 +101,7 @@ features = {
 	'drm-backend': false,
 	'x11-backend': false,
 	'libinput-backend': false,
+	'hwcomposer-backend': false,
 	'xwayland': false,
 	'gles2-renderer': false,
 	'vulkan-renderer': false,
@@ -168,10 +169,6 @@ wlr_deps = [
 	math,
 	rt,
 ]
-
-add_project_arguments([
-	'-I/usr/include/android',
-], language: 'c')
 
 subdir('protocol')
 subdir('render')
