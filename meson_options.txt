@@ -7,3 +7,4 @@ option('backends', type: 'array', choices: ['auto', 'drm', 'libinput', 'x11', 'h
 option('allocators', type: 'array', choices: ['auto', 'gbm'], value: ['auto'],
 	description: 'Select built-in allocators')
 option('session', type: 'feature', value: 'auto', description: 'Enable session support')
+option('droidian-extensions', description: 'Build droidian extensions', type: 'boolean', value: false)
