@@ -9,6 +9,8 @@
 #ifndef WLR_TYPES_WLR_INPUT_DEVICE_H
 #define WLR_TYPES_WLR_INPUT_DEVICE_H
 
+#include <wayland-server-core.h>
+
 enum wlr_button_state {
 	WLR_BUTTON_RELEASED,
 	WLR_BUTTON_PRESSED,
@@ -23,44 +25,16 @@ enum wlr_input_device_type {
 	WLR_INPUT_DEVICE_SWITCH,
 };
 
-/* Note: these are circular dependencies */
-#include <wlr/types/wlr_keyboard.h>
-#include <wlr/types/wlr_pointer.h>
-#include <wlr/types/wlr_touch.h>
-#include <wlr/types/wlr_tablet_tool.h>
-#include <wlr/types/wlr_tablet_pad.h>
-#include <wlr/types/wlr_switch.h>
-
-struct wlr_input_device_impl;
-
 struct wlr_input_device {
-	const struct wlr_input_device_impl *impl;
-
 	enum wlr_input_device_type type;
 	unsigned int vendor, product;
 	char *name;
-	// Or 0 if not applicable to this device
-	double width_mm, height_mm;
-	char *output_name;
-
-	/* wlr_input_device.type determines which of these is valid */
-	union {
-		void *_device;
-		struct wlr_keyboard *keyboard;
-		struct wlr_pointer *pointer;
-		struct wlr_switch *switch_device;
-		struct wlr_touch *touch;
-		struct wlr_tablet *tablet;
-		struct wlr_tablet_pad *tablet_pad;
-	};
 
 	struct {
 		struct wl_signal destroy;
 	} events;
 
 	void *data;
-
-	struct wl_list link;
 };
 
 #endif

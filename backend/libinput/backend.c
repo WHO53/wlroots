@@ -3,11 +3,12 @@
 #include <assert.h>
 #include <libinput.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <wlr/backend/interface.h>
 #include <wlr/backend/session.h>
 #include <wlr/util/log.h>
 #include "backend/libinput.h"
-#include "util/signal.h"
+#include "util/env.h"
 
 #if WLR_HAS_DROIDIAN_EXTENSIONS
 #include <unistd.h>
@@ -16,7 +17,8 @@
 static struct wlr_libinput_backend *get_libinput_backend_from_backend(
 		struct wlr_backend *wlr_backend) {
 	assert(wlr_backend_is_libinput(wlr_backend));
-	return (struct wlr_libinput_backend *)wlr_backend;
+	struct wlr_libinput_backend *backend = wl_container_of(wlr_backend, backend, backend);
+	return backend;
 }
 
 static int libinput_open_restricted(const char *path,
@@ -31,8 +33,11 @@ static int libinput_open_restricted(const char *path,
 	return open(path, O_RDWR | O_CLOEXEC | O_NONBLOCK);
 #else
 	struct wlr_libinput_backend *backend = _backend;
-
-	return wlr_session_open_file(backend->session, path);
+	struct wlr_device *dev = wlr_session_open_file(backend->session, path);
+	if (dev == NULL) {
+		return -1;
+	}
+	return dev->fd;
 #endif // WLR_HAS_DROIDIAN_EXTENSIONS
 }
 
@@ -43,7 +48,17 @@ static void libinput_close_restricted(int fd, void *_backend) {
 #else
 	struct wlr_libinput_backend *backend = _backend;
 
-	wlr_session_close_file(backend->session, fd);
+	struct wlr_device *dev;
+	bool found = false;
+	wl_list_for_each(dev, &backend->session->devices, link) {
+		if (dev->fd == fd) {
+			found = true;
+			break;
+		}
+	}
+	if (found) {
+		wlr_session_close_file(backend->session, dev);
+	}
 #endif // WLR_HAS_DROIDIAN_EXTENSIONS
 }
 
@@ -54,9 +69,10 @@ static const struct libinput_interface libinput_impl = {
 
 static int handle_libinput_readable(int fd, uint32_t mask, void *_backend) {
 	struct wlr_libinput_backend *backend = _backend;
-	if (libinput_dispatch(backend->libinput_context) != 0) {
-		wlr_log(WLR_ERROR, "Failed to dispatch libinput");
-		// TODO: some kind of abort?
+	int ret = libinput_dispatch(backend->libinput_context);
+	if (ret != 0) {
+		wlr_log(WLR_ERROR, "Failed to dispatch libinput: %s", strerror(-ret));
+		wl_display_terminate(backend->display);
 		return 0;
 	}
 	struct libinput_event *event;
@@ -90,7 +106,7 @@ static void log_libinput(struct libinput *libinput_context,
 static bool backend_start(struct wlr_backend *wlr_backend) {
 	struct wlr_libinput_backend *backend =
 		get_libinput_backend_from_backend(wlr_backend);
-	wlr_log(WLR_DEBUG, "Initializing libinput");
+	wlr_log(WLR_DEBUG, "Starting libinput backend");
 
 	backend->libinput_context = libinput_udev_create_context(&libinput_impl,
 		backend, backend->session->udev);
@@ -110,15 +126,10 @@ static bool backend_start(struct wlr_backend *wlr_backend) {
 	libinput_log_set_priority(backend->libinput_context, LIBINPUT_LOG_PRIORITY_ERROR);
 
 	int libinput_fd = libinput_get_fd(backend->libinput_context);
-	char *no_devs = getenv("WLR_LIBINPUT_NO_DEVICES");
-	if (no_devs) {
-		if (strcmp(no_devs, "1") != 0) {
-			no_devs = NULL;
-		}
-	}
-	if (!no_devs && backend->wlr_device_lists.length == 0) {
+
+	if (!env_parse_bool("WLR_LIBINPUT_NO_DEVICES") && wl_list_empty(&backend->devices)) {
 		handle_libinput_readable(libinput_fd, WL_EVENT_READABLE, backend);
-		if (backend->wlr_device_lists.length == 0) {
+		if (wl_list_empty(&backend->devices)) {
 			wlr_log(WLR_ERROR, "libinput initialization failed, no input devices");
 			wlr_log(WLR_ERROR, "Set WLR_LIBINPUT_NO_DEVICES=1 to suppress this check");
 			return false;
@@ -147,22 +158,17 @@ static void backend_destroy(struct wlr_backend *wlr_backend) {
 	struct wlr_libinput_backend *backend =
 		get_libinput_backend_from_backend(wlr_backend);
 
-	for (size_t i = 0; i < backend->wlr_device_lists.length; i++) {
-		struct wl_list *wlr_devices = backend->wlr_device_lists.items[i];
-		struct wlr_input_device *wlr_dev, *next;
-		wl_list_for_each_safe(wlr_dev, next, wlr_devices, link) {
-			wlr_input_device_destroy(wlr_dev);
-		}
-		free(wlr_devices);
+	struct wlr_libinput_input_device *dev, *tmp;
+	wl_list_for_each_safe(dev, tmp, &backend->devices, link) {
+		destroy_libinput_input_device(dev);
 	}
 
-	wlr_signal_emit_safe(&wlr_backend->events.destroy, wlr_backend);
+	wlr_backend_finish(wlr_backend);
 
 	wl_list_remove(&backend->display_destroy.link);
 	wl_list_remove(&backend->session_destroy.link);
 	wl_list_remove(&backend->session_signal.link);
 
-	wlr_list_finish(&backend->wlr_device_lists);
 	if (backend->input_event) {
 		wl_event_source_remove(backend->input_event);
 	}
@@ -182,7 +188,7 @@ bool wlr_backend_is_libinput(struct wlr_backend *b) {
 static void session_signal(struct wl_listener *listener, void *data) {
 	struct wlr_libinput_backend *backend =
 		wl_container_of(listener, backend, session_signal);
-	struct wlr_session *session = data;
+	struct wlr_session *session = backend->session;
 
 	if (!backend->libinput_context) {
 		return;
@@ -219,24 +225,20 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 
 struct wlr_backend *wlr_libinput_backend_create(struct wl_display *display,
 		struct wlr_session *session) {
-	struct wlr_libinput_backend *backend =
-		calloc(1, sizeof(struct wlr_libinput_backend));
+	struct wlr_libinput_backend *backend = calloc(1, sizeof(*backend));
 	if (!backend) {
 		wlr_log(WLR_ERROR, "Allocation failed: %s", strerror(errno));
 		return NULL;
 	}
 	wlr_backend_init(&backend->backend, &backend_impl);
 
-	if (!wlr_list_init(&backend->wlr_device_lists)) {
-		wlr_log(WLR_ERROR, "Allocation failed: %s", strerror(errno));
-		goto error_backend;
-	}
+	wl_list_init(&backend->devices);
 
 	backend->session = session;
 	backend->display = display;
 
 	backend->session_signal.notify = session_signal;
-	wl_signal_add(&session->session_signal, &backend->session_signal);
+	wl_signal_add(&session->events.active, &backend->session_signal);
 
 	backend->session_destroy.notify = handle_session_destroy;
 	wl_signal_add(&session->events.destroy, &backend->session_destroy);
@@ -245,15 +247,31 @@ struct wlr_backend *wlr_libinput_backend_create(struct wl_display *display,
 	wl_display_add_destroy_listener(display, &backend->display_destroy);
 
 	return &backend->backend;
-error_backend:
-	free(backend);
-	return NULL;
 }
 
 struct libinput_device *wlr_libinput_get_device_handle(
 		struct wlr_input_device *wlr_dev) {
-	struct wlr_libinput_input_device *dev =
-		(struct wlr_libinput_input_device *)wlr_dev;
+	struct wlr_libinput_input_device *dev = NULL;
+	switch (wlr_dev->type) {
+	case WLR_INPUT_DEVICE_KEYBOARD:
+		dev = device_from_keyboard(wlr_keyboard_from_input_device(wlr_dev));
+		break;
+	case WLR_INPUT_DEVICE_POINTER:
+		dev = device_from_pointer(wlr_pointer_from_input_device(wlr_dev));
+		break;
+	case WLR_INPUT_DEVICE_SWITCH:
+		dev = device_from_switch(wlr_switch_from_input_device(wlr_dev));
+		break;
+	case WLR_INPUT_DEVICE_TOUCH:
+		dev = device_from_touch(wlr_touch_from_input_device(wlr_dev));
+		break;
+	case WLR_INPUT_DEVICE_TABLET_TOOL:
+		dev = device_from_tablet(wlr_tablet_from_input_device(wlr_dev));
+		break;
+	case WLR_INPUT_DEVICE_TABLET_PAD:
+		dev = device_from_tablet_pad(wlr_tablet_pad_from_input_device(wlr_dev));
+		break;
+	}
 	return dev->handle;
 }
 

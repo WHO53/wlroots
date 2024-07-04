@@ -12,7 +12,6 @@
 #include <stdint.h>
 #include <wayland-server-core.h>
 #include <wlr/types/wlr_input_device.h>
-#include <wlr/types/wlr_list.h>
 
 /*
  * Copy+Paste from libinput, but this should neither use libinput, nor
@@ -61,7 +60,11 @@ struct wlr_tablet_tool {
 struct wlr_tablet_impl;
 
 struct wlr_tablet {
-	struct wlr_tablet_impl *impl;
+	struct wlr_input_device base;
+
+	const struct wlr_tablet_impl *impl;
+
+	double width_mm, height_mm;
 
 	struct {
 		struct wl_signal axis;
@@ -70,8 +73,7 @@ struct wlr_tablet {
 		struct wl_signal button;
 	} events;
 
-	char *name;
-	struct wlr_list paths; // char *
+	struct wl_array paths; // char *
 
 	void *data;
 };
@@ -88,8 +90,8 @@ enum wlr_tablet_tool_axes {
 	WLR_TABLET_TOOL_AXIS_WHEEL = 1 << 8,
 };
 
-struct wlr_event_tablet_tool_axis {
-	struct wlr_input_device *device;
+struct wlr_tablet_tool_axis_event {
+	struct wlr_tablet *tablet;
 	struct wlr_tablet_tool *tool;
 
 	uint32_t time_msec;
@@ -111,8 +113,8 @@ enum wlr_tablet_tool_proximity_state {
 	WLR_TABLET_TOOL_PROXIMITY_IN,
 };
 
-struct wlr_event_tablet_tool_proximity {
-	struct wlr_input_device *device;
+struct wlr_tablet_tool_proximity_event {
+	struct wlr_tablet *tablet;
 	struct wlr_tablet_tool *tool;
 	uint32_t time_msec;
 	// From 0..1
@@ -125,8 +127,8 @@ enum wlr_tablet_tool_tip_state {
 	WLR_TABLET_TOOL_TIP_DOWN,
 };
 
-struct wlr_event_tablet_tool_tip {
-	struct wlr_input_device *device;
+struct wlr_tablet_tool_tip_event {
+	struct wlr_tablet *tablet;
 	struct wlr_tablet_tool *tool;
 	uint32_t time_msec;
 	// From 0..1
@@ -134,12 +136,20 @@ struct wlr_event_tablet_tool_tip {
 	enum wlr_tablet_tool_tip_state state;
 };
 
-struct wlr_event_tablet_tool_button {
-	struct wlr_input_device *device;
+struct wlr_tablet_tool_button_event {
+	struct wlr_tablet *tablet;
 	struct wlr_tablet_tool *tool;
 	uint32_t time_msec;
 	uint32_t button;
 	enum wlr_button_state state;
 };
+
+/**
+ * Get a struct wlr_tablet from a struct wlr_input_device.
+ *
+ * Asserts that the input device is a tablet tool.
+ */
+struct wlr_tablet *wlr_tablet_from_input_device(
+	struct wlr_input_device *input_device);
 
 #endif

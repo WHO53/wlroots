@@ -1,9 +1,9 @@
 project(
 	'wlroots',
 	'c',
-	version: '0.12.0',
+	version: '0.17.2',
 	license: 'MIT',
-	meson_version: '>=0.54.0',
+	meson_version: '>=0.59.0',
 	default_options: [
 		'c_std=c11',
 		'warning_level=2',
@@ -15,10 +15,15 @@ project(
 # necessary for bugfix releases. Increasing soversion is required because
 # wlroots never guarantees ABI stability -- only API stability is guaranteed
 # between minor releases.
-soversion = '7d'
+soversion = 12
+
+little_endian = target_machine.endian() == 'little'
+big_endian = target_machine.endian() == 'big'
 
 add_project_arguments([
 	'-DWLR_USE_UNSTABLE',
+	'-DWLR_LITTLE_ENDIAN=@0@'.format(little_endian.to_int()),
+	'-DWLR_BIG_ENDIAN=@0@'.format(big_endian.to_int()),
 ], language: 'c')
 
 cc = meson.get_compiler('c')
@@ -36,6 +41,7 @@ add_project_arguments(cc.get_supported_arguments([
 	'-Wstrict-aliasing=2',
 	'-Woverflow',
 	'-Wmissing-prototypes',
+	'-Walloca',
 
 	'-Wno-missing-braces',
 	'-Wno-missing-field-initializers',
@@ -56,7 +62,7 @@ add_project_link_arguments(
 
 # Compute the relative path used by compiler invocations.
 source_root = meson.current_source_dir().split('/')
-build_root = meson.build_root().split('/')
+build_root = meson.global_build_root().split('/')
 relative_dir_parts = []
 i = 0
 in_prefix = true
@@ -86,75 +92,84 @@ if cc.has_argument('-fmacro-prefix-map=/prefix/to/hide=')
 	)
 else
 	add_project_arguments(
-		'-DWLR_REL_SRC_DIR="@0@"'.format(relative_dir),
+		'-D_WLR_REL_SRC_DIR="@0@"'.format(relative_dir),
 		language: 'c',
 	)
 endif
 
-conf_data = configuration_data()
-conf_data.set10('WLR_HAS_SYSTEMD', false)
-conf_data.set10('WLR_HAS_ELOGIND', false)
-conf_data.set10('WLR_HAS_LIBSEAT', false)
-conf_data.set10('WLR_HAS_X11_BACKEND', false)
-conf_data.set10('WLR_HAS_XWAYLAND', false)
-conf_data.set10('WLR_HAS_XCB_ERRORS', false)
-conf_data.set10('WLR_HAS_XCB_ICCCM', false)
-conf_data.set10('WLR_HAS_EGLMESAEXT_H', false)
-conf_data.set10('WLR_HAS_DROIDIAN_EXTENSIONS', false)
+features = {
+	'drm-backend': false,
+	'x11-backend': false,
+	'libinput-backend': false,
+	'xwayland': false,
+	'gles2-renderer': false,
+	'vulkan-renderer': false,
+	'gbm-allocator': false,
+	'session': false,
+}
+internal_features = {
+	'xcb-errors': false,
+	'egl': false,
+}
+internal_config = configuration_data()
 
-# Clang complains about some zeroed initializer lists (= {0}), even though they
-# are valid
-if cc.get_id() == 'clang'
-	add_project_arguments('-Wno-missing-field-initializers', language: 'c')
-	add_project_arguments('-Wno-missing-braces', language: 'c')
-endif
+wayland_project_options = ['tests=false', 'documentation=false']
+wayland_server = dependency('wayland-server',
+	version: '>=1.22',
+	fallback: 'wayland',
+	default_options: wayland_project_options,
+)
 
-wayland_server = dependency('wayland-server', version: '>=1.18')
-wayland_client = dependency('wayland-client')
-wayland_egl = dependency('wayland-egl')
-wayland_protos = dependency('wayland-protocols', version: '>=1.21')
-egl = dependency('egl')
-glesv2 = dependency('glesv2')
-drm = dependency('libdrm', version: '>=2.4.95')
-gbm = dependency('gbm', version: '>=17.1.0')
-libinput = dependency('libinput', version: '>=1.9.0')
-xkbcommon = dependency('xkbcommon')
-udev = dependency('libudev')
-pixman = dependency('pixman-1')
+drm = dependency('libdrm',
+	version: '>=2.4.114',
+	fallback: 'libdrm',
+	default_options: [
+		'intel=disabled',
+		'radeon=disabled',
+		'amdgpu=disabled',
+		'nouveau=disabled',
+		'vmwgfx=disabled',
+		'omap=disabled',
+		'exynos=disabled',
+		'freedreno=disabled',
+		'tegra=disabled',
+		'vc4=disabled',
+		'etnaviv=disabled',
+		'cairo-tests=disabled',
+		'man-pages=disabled',
+		'valgrind=disabled',
+		'tests=false',
+	],
+)
+xkbcommon = dependency(
+	'xkbcommon',
+	fallback: 'libxkbcommon',
+	default_options: [
+		'enable-tools=false',
+		'enable-x11=false',
+		'enable-docs=false',
+		'enable-xkbregistry=false',
+	],
+)
+pixman = dependency('pixman-1',
+	version: '>=0.42.0',
+	fallback: 'pixman',
+	default_options: ['werror=false'],
+)
 math = cc.find_library('m')
 rt = cc.find_library('rt')
-
-if cc.has_header('EGL/eglmesaext.h', dependencies: egl)
-	conf_data.set10('WLR_HAS_EGLMESAEXT_H', true)
-endif
-
-if get_option('with-droidian-extensions')
-	conf_data.set10('WLR_HAS_DROIDIAN_EXTENSIONS', true)
-endif
 
 wlr_files = []
 wlr_deps = [
 	wayland_server,
-	wayland_client,
-	wayland_egl,
-	wayland_protos,
-	egl,
-	glesv2,
 	drm,
-	gbm,
-	libinput,
 	xkbcommon,
-	udev,
 	pixman,
 	math,
 	rt,
 ]
 
-libinput_ver = libinput.version().split('.')
 add_project_arguments([
-	'-DLIBINPUT_MAJOR=' + libinput_ver[0],
-	'-DLIBINPUT_MINOR=' + libinput_ver[1],
-	'-DLIBINPUT_PATCH=' + libinput_ver[2],
 	'-I/usr/include/android',
 ], language: 'c')
 
@@ -169,47 +184,45 @@ subdir('xwayland')
 
 subdir('include')
 
-wlr_inc = include_directories('.', 'include')
-proto_inc = include_directories('protocol')
+wlr_inc = include_directories('include')
 
 symbols_file = 'wlroots.syms'
 symbols_flag = '-Wl,--version-script,@0@/@1@'.format(meson.current_source_dir(), symbols_file)
 lib_wlr = library(
 	meson.project_name(), wlr_files,
-	soversion: soversion,
+	soversion: soversion.to_string(),
 	dependencies: wlr_deps,
-	include_directories: [wlr_inc, proto_inc],
+	include_directories: [wlr_inc],
 	install: true,
-	link_args : symbols_flag,
+	link_args: symbols_flag,
 	link_depends: symbols_file,
 )
+
+wlr_vars = {}
+foreach name, have : features
+	wlr_vars += { 'have_' + name.underscorify(): have.to_string() }
+endforeach
 
 wlroots = declare_dependency(
 	link_with: lib_wlr,
 	dependencies: wlr_deps,
 	include_directories: wlr_inc,
+	variables: wlr_vars,
 )
 
 meson.override_dependency('wlroots', wlroots)
 
-summary({
-	'systemd': conf_data.get('WLR_HAS_SYSTEMD', 0),
-	'elogind': conf_data.get('WLR_HAS_ELOGIND', 0),
-	'libseat': conf_data.get('WLR_HAS_LIBSEAT', 0),
-	'xwayland': conf_data.get('WLR_HAS_XWAYLAND', 0),
-	'x11_backend': conf_data.get('WLR_HAS_X11_BACKEND', 0),
-	'xcb-icccm': conf_data.get('WLR_HAS_XCB_ICCCM', 0),
-	'xcb-errors': conf_data.get('WLR_HAS_XCB_ERRORS', 0),
-})
+summary(features + internal_features, bool_yn: true)
 
 if get_option('examples')
 	subdir('examples')
+	subdir('tinywl')
 endif
 
 pkgconfig = import('pkgconfig')
-pkgconfig.generate(lib_wlr,
-	version: meson.project_version(),
-	filebase: meson.project_name(),
-	name: meson.project_name(),
+pkgconfig.generate(
+	lib_wlr,
 	description: 'Wayland compositor library',
+	url: 'https://gitlab.freedesktop.org/wlroots/wlroots',
+	variables: wlr_vars,
 )

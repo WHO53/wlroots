@@ -1,12 +1,20 @@
 #include <assert.h>
 #include <stdlib.h>
-#include <wlr/types/wlr_surface.h>
+#include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_viewporter.h>
 #include <wlr/util/log.h>
-#include "util/signal.h"
 #include "viewporter-protocol.h"
 
 #define VIEWPORTER_VERSION 1
+
+struct wlr_viewport {
+	struct wl_resource *resource;
+	struct wlr_surface *surface;
+
+	struct wlr_addon addon;
+
+	struct wl_listener surface_client_commit;
+};
 
 static const struct wp_viewport_interface viewport_impl;
 
@@ -95,45 +103,65 @@ static void viewport_destroy(struct wlr_viewport *viewport) {
 	if (viewport == NULL) {
 		return;
 	}
+
+	struct wlr_surface_state *pending = &viewport->surface->pending;
+	pending->viewport.has_src = false;
+	pending->viewport.has_dst = false;
+	pending->committed |= WLR_SURFACE_STATE_VIEWPORT;
+
+	wlr_addon_finish(&viewport->addon);
+
 	wl_resource_set_user_data(viewport->resource, NULL);
-	wl_list_remove(&viewport->surface_destroy.link);
-	wl_list_remove(&viewport->surface_commit.link);
+	wl_list_remove(&viewport->surface_client_commit.link);
 	free(viewport);
 }
+
+static void surface_addon_destroy(struct wlr_addon *addon) {
+	struct wlr_viewport *viewport = wl_container_of(addon, viewport, addon);
+	viewport_destroy(viewport);
+}
+
+static const struct wlr_addon_interface surface_addon_impl = {
+	.name = "wlr_viewport",
+	.destroy = surface_addon_destroy,
+};
 
 static void viewport_handle_resource_destroy(struct wl_resource *resource) {
 	struct wlr_viewport *viewport = viewport_from_resource(resource);
 	viewport_destroy(viewport);
 }
 
-static void viewport_handle_surface_destroy(struct wl_listener *listener,
-		void *data) {
-	struct wlr_viewport *viewport =
-		wl_container_of(listener, viewport, surface_destroy);
-	viewport_destroy(viewport);
+static bool check_src_buffer_bounds(const struct wlr_surface_state *state) {
+	int width = state->buffer_width / state->scale;
+	int height = state->buffer_height / state->scale;
+	if (state->transform & WL_OUTPUT_TRANSFORM_90) {
+		int tmp = width;
+		width = height;
+		height = tmp;
+	}
+
+	struct wlr_fbox box = state->viewport.src;
+	return box.x + box.width <= width && box.y + box.height <= height;
 }
 
-static void viewport_handle_surface_commit(struct wl_listener *listener,
+static void viewport_handle_surface_client_commit(struct wl_listener *listener,
 		void *data) {
 	struct wlr_viewport *viewport =
-		wl_container_of(listener, viewport, surface_commit);
+		wl_container_of(listener, viewport, surface_client_commit);
 
-	struct wlr_surface_state *current = &viewport->surface->pending;
+	struct wlr_surface_state *state = &viewport->surface->pending;
 
-	if (!current->viewport.has_dst &&
-			(floor(current->viewport.src.width) != current->viewport.src.width ||
-			floor(current->viewport.src.height) != current->viewport.src.height)) {
+	if (!state->viewport.has_dst &&
+			(floor(state->viewport.src.width) != state->viewport.src.width ||
+			floor(state->viewport.src.height) != state->viewport.src.height)) {
 		wl_resource_post_error(viewport->resource, WP_VIEWPORT_ERROR_BAD_SIZE,
 			"wl_viewport.set_source width and height must be integers "
 			"when the destination rectangle is unset");
 		return;
 	}
 
-	if (current->viewport.has_src && current->buffer_resource != NULL &&
-			(current->viewport.src.x + current->viewport.src.width >
-				current->buffer_width ||
-			current->viewport.src.y + current->viewport.src.height >
-				current->buffer_height)) {
+	if (state->viewport.has_src && state->buffer != NULL &&
+			!check_src_buffer_bounds(state)) {
 		wl_resource_post_error(viewport->resource, WP_VIEWPORT_ERROR_OUT_OF_BUFFER,
 			"source rectangle out of buffer bounds");
 		return;
@@ -149,6 +177,12 @@ static void viewporter_handle_get_viewport(struct wl_client *client,
 		struct wl_resource *resource, uint32_t id,
 		struct wl_resource *surface_resource) {
 	struct wlr_surface *surface = wlr_surface_from_resource(surface_resource);
+
+	if (wlr_addon_find(&surface->addons, NULL, &surface_addon_impl) != NULL) {
+		wl_resource_post_error(resource, WP_VIEWPORTER_ERROR_VIEWPORT_EXISTS,
+			"wp_viewport for this surface already exists");
+		return;
+	}
 
 	struct wlr_viewport *viewport = calloc(1, sizeof(*viewport));
 	if (viewport == NULL) {
@@ -169,11 +203,10 @@ static void viewporter_handle_get_viewport(struct wl_client *client,
 
 	viewport->surface = surface;
 
-	viewport->surface_destroy.notify = viewport_handle_surface_destroy;
-	wl_signal_add(&surface->events.destroy, &viewport->surface_destroy);
+	wlr_addon_init(&viewport->addon, &surface->addons, NULL, &surface_addon_impl);
 
-	viewport->surface_commit.notify = viewport_handle_surface_commit;
-	wl_signal_add(&surface->events.commit, &viewport->surface_commit);
+	viewport->surface_client_commit.notify = viewport_handle_surface_client_commit;
+	wl_signal_add(&surface->events.client_commit, &viewport->surface_client_commit);
 }
 
 static const struct wp_viewporter_interface viewporter_impl = {
@@ -197,7 +230,7 @@ static void viewporter_bind(struct wl_client *client, void *data,
 static void handle_display_destroy(struct wl_listener *listener, void *data) {
 	struct wlr_viewporter *viewporter =
 		wl_container_of(listener, viewporter, display_destroy);
-	wlr_signal_emit_safe(&viewporter->events.destroy, NULL);
+	wl_signal_emit_mutable(&viewporter->events.destroy, NULL);
 	wl_global_destroy(viewporter->global);
 	free(viewporter);
 }

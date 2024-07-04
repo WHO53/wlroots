@@ -1,7 +1,7 @@
 WAYLAND_PROTOCOLS=$(shell pkg-config --variable=pkgdatadir wayland-protocols)
 WAYLAND_SCANNER=$(shell pkg-config --variable=wayland_scanner wayland-scanner)
 LIBS=\
-	 $(shell pkg-config --cflags --libs wlroots) \
+	 $(shell pkg-config --cflags --libs "wlroots >= 0.17.0") \
 	 $(shell pkg-config --cflags --libs wayland-server) \
 	 $(shell pkg-config --cflags --libs xkbcommon)
 
@@ -12,11 +12,7 @@ xdg-shell-protocol.h:
 	$(WAYLAND_SCANNER) server-header \
 		$(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml $@
 
-xdg-shell-protocol.c: xdg-shell-protocol.h
-	$(WAYLAND_SCANNER) private-code \
-		$(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml $@
-
-tinywl: tinywl.c xdg-shell-protocol.h xdg-shell-protocol.c
+tinywl: tinywl.c xdg-shell-protocol.h
 	$(CC) $(CFLAGS) \
 		-g -Werror -I. \
 		-DWLR_USE_UNSTABLE \

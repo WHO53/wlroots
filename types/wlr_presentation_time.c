@@ -2,13 +2,25 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
-#include <wlr/types/wlr_presentation_time.h>
-#include <wlr/types/wlr_surface.h>
 #include <wlr/backend.h>
+#include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_presentation_time.h>
+#include <wlr/util/addon.h>
 #include "presentation-time-protocol.h"
-#include "util/signal.h"
 
 #define PRESENTATION_VERSION 1
+
+struct wlr_presentation_surface_state {
+	struct wlr_presentation_feedback *feedback;
+};
+
+struct wlr_presentation_surface {
+	struct wlr_presentation_surface_state current, pending;
+
+	struct wlr_addon addon; // wlr_surface.addons
+
+	struct wl_listener surface_commit;
+};
 
 static void feedback_handle_resource_destroy(struct wl_resource *resource) {
 	wl_list_remove(wl_resource_get_link(resource));
@@ -16,7 +28,7 @@ static void feedback_handle_resource_destroy(struct wl_resource *resource) {
 
 static void feedback_resource_send_presented(
 		struct wl_resource *feedback_resource,
-		struct wlr_presentation_event *event) {
+		const struct wlr_presentation_event *event) {
 	struct wl_client *client = wl_resource_get_client(feedback_resource);
 	struct wl_resource *output_resource;
 	wl_resource_for_each(output_resource, &event->output->resources) {
@@ -43,41 +55,34 @@ static void feedback_resource_send_discarded(
 	wl_resource_destroy(feedback_resource);
 }
 
-static void feedback_handle_surface_commit(struct wl_listener *listener,
-		void *data) {
-	struct wlr_presentation_feedback *feedback =
-		wl_container_of(listener, feedback, surface_commit);
+static const struct wlr_addon_interface presentation_surface_addon_impl;
 
-	if (feedback->committed) {
-		if (!feedback->sampled) {
-			// The content update has been superseded
-			wlr_presentation_feedback_destroy(feedback);
-		}
-	} else {
-		feedback->committed = true;
-	}
+static void presentation_surface_addon_destroy(struct wlr_addon *addon) {
+	struct wlr_presentation_surface *p_surface =
+		wl_container_of(addon, p_surface, addon);
+
+	wlr_addon_finish(addon);
+
+	wlr_presentation_feedback_destroy(p_surface->current.feedback);
+	wlr_presentation_feedback_destroy(p_surface->pending.feedback);
+
+	wl_list_remove(&p_surface->surface_commit.link);
+	free(p_surface);
 }
 
-static void feedback_unset_surface(struct wlr_presentation_feedback *feedback) {
-	if (feedback->surface == NULL) {
-		return;
-	}
+static const struct wlr_addon_interface presentation_surface_addon_impl = {
+	.name = "wlr_presentation_surface",
+	.destroy = presentation_surface_addon_destroy,
+};
 
-	feedback->surface = NULL;
-	wl_list_remove(&feedback->surface_commit.link);
-	wl_list_remove(&feedback->surface_destroy.link);
-}
+static void presentation_surface_handle_surface_commit(
+		struct wl_listener *listener, void *data) {
+	struct wlr_presentation_surface *p_surface =
+		wl_container_of(listener, p_surface, surface_commit);
 
-static void feedback_handle_surface_destroy(struct wl_listener *listener,
-		void *data) {
-	struct wlr_presentation_feedback *feedback =
-		wl_container_of(listener, feedback, surface_destroy);
-	if (feedback->sampled) {
-		// The compositor might have a handle on this feedback
-		feedback_unset_surface(feedback);
-	} else {
-		wlr_presentation_feedback_destroy(feedback);
-	}
+	wlr_presentation_feedback_destroy(p_surface->current.feedback);
+	p_surface->current.feedback = p_surface->pending.feedback;
+	p_surface->pending.feedback = NULL;
 }
 
 static const struct wp_presentation_interface presentation_impl;
@@ -96,31 +101,35 @@ static void presentation_handle_feedback(struct wl_client *client,
 		presentation_from_resource(presentation_resource);
 	struct wlr_surface *surface = wlr_surface_from_resource(surface_resource);
 
-	bool found = false;
-	struct wlr_presentation_feedback *feedback;
-	wl_list_for_each(feedback, &presentation->feedbacks, link) {
-		if (feedback->surface == surface && !feedback->committed) {
-			found = true;
-			break;
+	struct wlr_addon *addon = wlr_addon_find(&surface->addons,
+		presentation, &presentation_surface_addon_impl);
+	struct wlr_presentation_surface *p_surface = NULL;
+	if (addon != NULL) {
+		p_surface = wl_container_of(addon, p_surface, addon);
+	} else {
+		p_surface = calloc(1, sizeof(*p_surface));
+		if (p_surface == NULL) {
+			wl_client_post_no_memory(client);
+			return;
 		}
+		wlr_addon_init(&p_surface->addon, &surface->addons,
+			presentation, &presentation_surface_addon_impl);
+		p_surface->surface_commit.notify =
+			presentation_surface_handle_surface_commit;
+		wl_signal_add(&surface->events.commit,
+			&p_surface->surface_commit);
 	}
-	if (!found) {
-		feedback = calloc(1, sizeof(struct wlr_presentation_feedback));
+
+	struct wlr_presentation_feedback *feedback = p_surface->pending.feedback;
+	if (feedback == NULL) {
+		feedback = calloc(1, sizeof(*feedback));
 		if (feedback == NULL) {
 			wl_client_post_no_memory(client);
 			return;
 		}
 
-		feedback->surface = surface;
 		wl_list_init(&feedback->resources);
-
-		feedback->surface_commit.notify = feedback_handle_surface_commit;
-		wl_signal_add(&surface->events.commit, &feedback->surface_commit);
-
-		feedback->surface_destroy.notify = feedback_handle_surface_destroy;
-		wl_signal_add(&surface->events.destroy, &feedback->surface_destroy);
-
-		wl_list_insert(&presentation->feedbacks, &feedback->link);
+		p_surface->pending.feedback = feedback;
 	}
 
 	uint32_t version = wl_resource_get_version(presentation_resource);
@@ -159,13 +168,13 @@ static void presentation_bind(struct wl_client *client, void *data,
 	wl_resource_set_implementation(resource, &presentation_impl, presentation,
 		NULL);
 
-	wp_presentation_send_clock_id(resource, (uint32_t)presentation->clock);
+	wp_presentation_send_clock_id(resource, CLOCK_MONOTONIC);
 }
 
 static void handle_display_destroy(struct wl_listener *listener, void *data) {
 	struct wlr_presentation *presentation =
 		wl_container_of(listener, presentation, display_destroy);
-	wlr_signal_emit_safe(&presentation->events.destroy, presentation);
+	wl_signal_emit_mutable(&presentation->events.destroy, presentation);
 	wl_list_remove(&presentation->display_destroy.link);
 	wl_global_destroy(presentation->global);
 	free(presentation);
@@ -173,8 +182,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 
 struct wlr_presentation *wlr_presentation_create(struct wl_display *display,
 		struct wlr_backend *backend) {
-	struct wlr_presentation *presentation =
-		calloc(1, sizeof(struct wlr_presentation));
+	struct wlr_presentation *presentation = calloc(1, sizeof(*presentation));
 	if (presentation == NULL) {
 		return NULL;
 	}
@@ -186,9 +194,6 @@ struct wlr_presentation *wlr_presentation_create(struct wl_display *display,
 		return NULL;
 	}
 
-	presentation->clock = wlr_backend_get_presentation_clock(backend);
-
-	wl_list_init(&presentation->feedbacks);
 	wl_signal_init(&presentation->events.destroy);
 
 	presentation->display_destroy.notify = handle_display_destroy;
@@ -199,26 +204,24 @@ struct wlr_presentation *wlr_presentation_create(struct wl_display *display,
 
 void wlr_presentation_feedback_send_presented(
 		struct wlr_presentation_feedback *feedback,
-		struct wlr_presentation_event *event) {
+		const struct wlr_presentation_event *event) {
 	struct wl_resource *resource, *tmp;
 	wl_resource_for_each_safe(resource, tmp, &feedback->resources) {
 		feedback_resource_send_presented(resource, event);
 	}
-
-	feedback->presented = true;
 }
 
 struct wlr_presentation_feedback *wlr_presentation_surface_sampled(
 		struct wlr_presentation *presentation, struct wlr_surface *surface) {
-	// TODO: maybe use a hashtable to optimize this function
-	struct wlr_presentation_feedback *feedback, *feedback_tmp;
-	wl_list_for_each_safe(feedback, feedback_tmp,
-			&presentation->feedbacks, link) {
-		if (feedback->surface == surface && feedback->committed &&
-				!feedback->sampled) {
-			feedback->sampled = true;
-			return feedback;
-		}
+	struct wlr_addon *addon = wlr_addon_find(&surface->addons,
+		presentation, &presentation_surface_addon_impl);
+	if (addon != NULL) {
+		struct wlr_presentation_surface *p_surface =
+			wl_container_of(addon, p_surface, addon);
+		struct wlr_presentation_feedback *sampled =
+			p_surface->current.feedback;
+		p_surface->current.feedback = NULL;
+		return sampled;
 	}
 	return NULL;
 }
@@ -231,29 +234,26 @@ void wlr_presentation_feedback_destroy(
 		return;
 	}
 
-	if (!feedback->presented) {
-		struct wl_resource *resource, *tmp;
-		wl_resource_for_each_safe(resource, tmp, &feedback->resources) {
-			feedback_resource_send_discarded(resource);
-		}
+	struct wl_resource *resource, *tmp;
+	wl_resource_for_each_safe(resource, tmp, &feedback->resources) {
+		feedback_resource_send_discarded(resource);
 	}
 	assert(wl_list_empty(&feedback->resources));
 
-	feedback_unset_surface(feedback);
 	feedback_unset_output(feedback);
-	wl_list_remove(&feedback->link);
 	free(feedback);
 }
 
 void wlr_presentation_event_from_output(struct wlr_presentation_event *event,
 		const struct wlr_output_event_present *output_event) {
-	memset(event, 0, sizeof(*event));
-	event->output = output_event->output;
-	event->tv_sec = (uint64_t)output_event->when->tv_sec;
-	event->tv_nsec = (uint32_t)output_event->when->tv_nsec;
-	event->refresh = (uint32_t)output_event->refresh;
-	event->seq = (uint64_t)output_event->seq;
-	event->flags = output_event->flags;
+	*event = (struct wlr_presentation_event){
+		.output = output_event->output,
+		.tv_sec = (uint64_t)output_event->when->tv_sec,
+		.tv_nsec = (uint32_t)output_event->when->tv_nsec,
+		.refresh = (uint32_t)output_event->refresh,
+		.seq = (uint64_t)output_event->seq,
+		.flags = output_event->flags,
+	};
 }
 
 static void feedback_unset_output(struct wlr_presentation_feedback *feedback) {
@@ -289,9 +289,14 @@ static void feedback_handle_output_present(struct wl_listener *listener,
 		return;
 	}
 
-	struct wlr_presentation_event event = {0};
-	wlr_presentation_event_from_output(&event, output_event);
-	wlr_presentation_feedback_send_presented(feedback, &event);
+	if (output_event->presented) {
+		struct wlr_presentation_event event = {0};
+		wlr_presentation_event_from_output(&event, output_event);
+		if (!feedback->zero_copy) {
+			event.flags &= ~WP_PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
+		}
+		wlr_presentation_feedback_send_presented(feedback, &event);
+	}
 	wlr_presentation_feedback_destroy(feedback);
 }
 
@@ -302,9 +307,9 @@ static void feedback_handle_output_destroy(struct wl_listener *listener,
 	wlr_presentation_feedback_destroy(feedback);
 }
 
-void wlr_presentation_surface_sampled_on_output(
+static void presentation_surface_queued_on_output(
 		struct wlr_presentation *presentation, struct wlr_surface *surface,
-		struct wlr_output *output) {
+		struct wlr_output *output, bool zero_copy) {
 	struct wlr_presentation_feedback *feedback =
 		wlr_presentation_surface_sampled(presentation, surface);
 	if (feedback == NULL) {
@@ -313,6 +318,7 @@ void wlr_presentation_surface_sampled_on_output(
 
 	assert(feedback->output == NULL);
 	feedback->output = output;
+	feedback->zero_copy = zero_copy;
 
 	feedback->output_commit.notify = feedback_handle_output_commit;
 	wl_signal_add(&output->events.commit, &feedback->output_commit);
@@ -320,4 +326,18 @@ void wlr_presentation_surface_sampled_on_output(
 	wl_signal_add(&output->events.present, &feedback->output_present);
 	feedback->output_destroy.notify = feedback_handle_output_destroy;
 	wl_signal_add(&output->events.destroy, &feedback->output_destroy);
+}
+
+void wlr_presentation_surface_textured_on_output(
+		struct wlr_presentation *presentation, struct wlr_surface *surface,
+		struct wlr_output *output) {
+	return presentation_surface_queued_on_output(presentation, surface,
+		output, false);
+}
+
+void wlr_presentation_surface_scanned_out_on_output(
+		struct wlr_presentation *presentation, struct wlr_surface *surface,
+		struct wlr_output *output) {
+	return presentation_surface_queued_on_output(presentation, surface,
+		output, true);
 }

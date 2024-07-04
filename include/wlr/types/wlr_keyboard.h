@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <wayland-server-core.h>
 #include <wayland-server-protocol.h>
+#include <wlr/types/wlr_input_device.h>
 #include <xkbcommon/xkbcommon.h>
 
 #define WLR_LED_COUNT 3
@@ -48,16 +49,20 @@ struct wlr_keyboard_modifiers {
 };
 
 struct wlr_keyboard {
+	struct wlr_input_device base;
+
 	const struct wlr_keyboard_impl *impl;
 	struct wlr_keyboard_group *group;
 
 	char *keymap_string;
 	size_t keymap_size;
+	int keymap_fd;
 	struct xkb_keymap *keymap;
 	struct xkb_state *xkb_state;
 	xkb_led_index_t led_indexes[WLR_LED_COUNT];
 	xkb_mod_index_t mod_indexes[WLR_MODIFIER_COUNT];
 
+	uint32_t leds;
 	uint32_t keycodes[WLR_KEYBOARD_KEYS_CAP];
 	size_t num_keycodes;
 	struct wlr_keyboard_modifiers modifiers;
@@ -69,7 +74,7 @@ struct wlr_keyboard {
 
 	struct {
 		/**
-		 * The `key` event signals with a `wlr_event_keyboard_key` event that a
+		 * The `key` event signals with a struct wlr_keyboard_key_event that a
 		 * key has been pressed or released on the keyboard. This event is
 		 * emitted before the xkb state of the keyboard has been updated
 		 * (including modifiers).
@@ -78,25 +83,32 @@ struct wlr_keyboard {
 
 		/**
 		 * The `modifiers` event signals that the modifier state of the
-		 * `wlr_keyboard` has been updated. At this time, you can read the
-		 * modifier state of the `wlr_keyboard` and handle the updated state by
-		 * sending it to clients.
+		 * struct wlr_keyboard has been updated. At this time, you can read the
+		 * modifier state of the struct wlr_keyboard and handle the updated
+		 * state by sending it to clients.
 		 */
 		struct wl_signal modifiers;
 		struct wl_signal keymap;
 		struct wl_signal repeat_info;
-		struct wl_signal destroy;
 	} events;
 
 	void *data;
 };
 
-struct wlr_event_keyboard_key {
+struct wlr_keyboard_key_event {
 	uint32_t time_msec;
 	uint32_t keycode;
 	bool update_state; // if backend doesn't update modifiers on its own
 	enum wl_keyboard_key_state state;
 };
+
+/**
+ * Get a struct wlr_keyboard from a struct wlr_input_device.
+ *
+ * Asserts that the input device is a keyboard.
+ */
+struct wlr_keyboard *wlr_keyboard_from_input_device(
+	struct wlr_input_device *input_device);
 
 bool wlr_keyboard_set_keymap(struct wlr_keyboard *kb,
 	struct xkb_keymap *keymap);
@@ -104,12 +116,27 @@ bool wlr_keyboard_set_keymap(struct wlr_keyboard *kb,
 bool wlr_keyboard_keymaps_match(struct xkb_keymap *km1, struct xkb_keymap *km2);
 
 /**
- * Sets the keyboard repeat info. `rate` is in key repeats/second and delay is
- * in milliseconds.
+ * Set the keyboard repeat info.
+ *
+ * rate is in key repeats/second and delay is in milliseconds.
  */
-void wlr_keyboard_set_repeat_info(struct wlr_keyboard *kb, int32_t rate,
-	int32_t delay);
+void wlr_keyboard_set_repeat_info(struct wlr_keyboard *kb, int32_t rate_hz,
+	int32_t delay_ms);
+
+/**
+ * Update the LEDs on the device, if any.
+ *
+ * leds is a bitmask of enum wlr_keyboard_led.
+ *
+ * If the device doesn't have the provided LEDs, this function is a no-op.
+ */
 void wlr_keyboard_led_update(struct wlr_keyboard *keyboard, uint32_t leds);
+
+/**
+ * Get the set of currently depressed or latched modifiers.
+ *
+ * A bitmask of enum wlr_keyboard_modifier is returned.
+ */
 uint32_t wlr_keyboard_get_modifiers(struct wlr_keyboard *keyboard);
 
 #endif

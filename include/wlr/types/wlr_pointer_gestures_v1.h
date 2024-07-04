@@ -11,12 +11,14 @@
 
 #include <wayland-server-core.h>
 #include <wlr/types/wlr_seat.h>
-#include <wlr/types/wlr_surface.h>
+
+struct wlr_surface;
 
 struct wlr_pointer_gestures_v1 {
 	struct wl_global *global;
-	struct wl_list swipes; // wl_resource_get_link
-	struct wl_list pinches; // wl_resource_get_link
+	struct wl_list swipes; // wl_resource_get_link()
+	struct wl_list pinches; // wl_resource_get_link()
+	struct wl_list holds; // wl_resource_get_link()
 
 	struct wl_listener display_destroy;
 
@@ -61,6 +63,17 @@ void wlr_pointer_gestures_v1_send_pinch_update(
 	double scale,
 	double rotation);
 void wlr_pointer_gestures_v1_send_pinch_end(
+	struct wlr_pointer_gestures_v1 *gestures,
+	struct wlr_seat *seat,
+	uint32_t time_msec,
+	bool cancelled);
+
+void wlr_pointer_gestures_v1_send_hold_begin(
+	struct wlr_pointer_gestures_v1 *gestures,
+	struct wlr_seat *seat,
+	uint32_t time_msec,
+	uint32_t fingers);
+void wlr_pointer_gestures_v1_send_hold_end(
 	struct wlr_pointer_gestures_v1 *gestures,
 	struct wlr_seat *seat,
 	uint32_t time_msec,

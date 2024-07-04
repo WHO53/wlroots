@@ -1,13 +1,22 @@
-#include "util/array.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #include <wayland-server-core.h>
 #include <wlr/interfaces/wlr_keyboard.h>
-#include <wlr/types/wlr_keyboard.h>
 #include <wlr/util/log.h>
+#include "interfaces/wlr_input_device.h"
 #include "types/wlr_keyboard.h"
-#include "util/signal.h"
+#include "util/set.h"
+#include "util/shm.h"
+#include "util/time.h"
+
+struct wlr_keyboard *wlr_keyboard_from_input_device(
+		struct wlr_input_device *input_device) {
+	assert(input_device->type == WLR_INPUT_DEVICE_KEYBOARD);
+	return wl_container_of(input_device, (struct wlr_keyboard *)NULL, base);
+}
 
 void keyboard_led_update(struct wlr_keyboard *keyboard) {
 	if (keyboard->xkb_state == NULL) {
@@ -57,7 +66,7 @@ bool keyboard_modifier_update(struct wlr_keyboard *keyboard) {
 }
 
 void keyboard_key_update(struct wlr_keyboard *keyboard,
-		struct wlr_event_keyboard_key *event) {
+		struct wlr_keyboard_key_event *event) {
 	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 		set_add(keyboard->keycodes, &keyboard->num_keycodes,
 			WLR_KEYBOARD_KEYS_CAP, event->keycode);
@@ -81,16 +90,16 @@ void wlr_keyboard_notify_modifiers(struct wlr_keyboard *keyboard,
 
 	bool updated = keyboard_modifier_update(keyboard);
 	if (updated) {
-		wlr_signal_emit_safe(&keyboard->events.modifiers, keyboard);
+		wl_signal_emit_mutable(&keyboard->events.modifiers, keyboard);
 	}
 
 	keyboard_led_update(keyboard);
 }
 
 void wlr_keyboard_notify_key(struct wlr_keyboard *keyboard,
-		struct wlr_event_keyboard_key *event) {
+		struct wlr_keyboard_key_event *event) {
 	keyboard_key_update(keyboard, event);
-	wlr_signal_emit_safe(&keyboard->events.key, event);
+	wl_signal_emit_mutable(&keyboard->events.key, event);
 
 	if (keyboard->xkb_state == NULL) {
 		return;
@@ -104,59 +113,118 @@ void wlr_keyboard_notify_key(struct wlr_keyboard *keyboard,
 
 	bool updated = keyboard_modifier_update(keyboard);
 	if (updated) {
-		wlr_signal_emit_safe(&keyboard->events.modifiers, keyboard);
+		wl_signal_emit_mutable(&keyboard->events.modifiers, keyboard);
 	}
 
 	keyboard_led_update(keyboard);
 }
 
 void wlr_keyboard_init(struct wlr_keyboard *kb,
-		const struct wlr_keyboard_impl *impl) {
-	kb->impl = impl;
+		const struct wlr_keyboard_impl *impl, const char *name) {
+	*kb = (struct wlr_keyboard){
+		.impl = impl,
+		.keymap_fd = -1,
+
+		// Sane defaults
+		.repeat_info.rate = 25,
+		.repeat_info.delay = 600,
+	};
+	wlr_input_device_init(&kb->base, WLR_INPUT_DEVICE_KEYBOARD, name);
+
 	wl_signal_init(&kb->events.key);
 	wl_signal_init(&kb->events.modifiers);
 	wl_signal_init(&kb->events.keymap);
 	wl_signal_init(&kb->events.repeat_info);
-	wl_signal_init(&kb->events.destroy);
-
-	// Sane defaults
-	kb->repeat_info.rate = 25;
-	kb->repeat_info.delay = 600;
 }
 
-void wlr_keyboard_destroy(struct wlr_keyboard *kb) {
-	if (kb == NULL) {
-		return;
-	}
-	wlr_signal_emit_safe(&kb->events.destroy, kb);
-	xkb_state_unref(kb->xkb_state);
+static void keyboard_unset_keymap(struct wlr_keyboard *kb) {
 	xkb_keymap_unref(kb->keymap);
+	kb->keymap = NULL;
+	xkb_state_unref(kb->xkb_state);
+	kb->xkb_state = NULL;
 	free(kb->keymap_string);
-	if (kb->impl && kb->impl->destroy) {
-		kb->impl->destroy(kb);
-	} else {
-		wl_list_remove(&kb->events.key.listener_list);
-		free(kb);
+	kb->keymap_string = NULL;
+	kb->keymap_size = 0;
+	if (kb->keymap_fd >= 0) {
+		close(kb->keymap_fd);
 	}
+	kb->keymap_fd = -1;
+}
+
+void wlr_keyboard_finish(struct wlr_keyboard *kb) {
+	/* Release pressed keys */
+	size_t orig_num_keycodes = kb->num_keycodes;
+	for (size_t i = 0; i < orig_num_keycodes; ++i) {
+		assert(kb->num_keycodes == orig_num_keycodes - i);
+		struct wlr_keyboard_key_event event = {
+			.time_msec = get_current_time_msec(),
+			.keycode = kb->keycodes[orig_num_keycodes - i - 1],
+			.update_state = false,
+			.state = WL_KEYBOARD_KEY_STATE_RELEASED,
+		};
+		wlr_keyboard_notify_key(kb, &event);  // updates num_keycodes
+	}
+
+	wlr_input_device_finish(&kb->base);
+
+	keyboard_unset_keymap(kb);
 }
 
 void wlr_keyboard_led_update(struct wlr_keyboard *kb, uint32_t leds) {
+	if (kb->leds == leds) {
+		return;
+	}
+
+	kb->leds = leds;
+
 	if (kb->impl && kb->impl->led_update) {
 		kb->impl->led_update(kb, leds);
 	}
 }
 
-bool wlr_keyboard_set_keymap(struct wlr_keyboard *kb,
-		struct xkb_keymap *keymap) {
-	xkb_keymap_unref(kb->keymap);
-	kb->keymap = xkb_keymap_ref(keymap);
-
-	xkb_state_unref(kb->xkb_state);
-	kb->xkb_state = xkb_state_new(kb->keymap);
-	if (kb->xkb_state == NULL) {
-		wlr_log(WLR_ERROR, "Failed to create XKB state");
-		goto err;
+bool wlr_keyboard_set_keymap(struct wlr_keyboard *kb, struct xkb_keymap *keymap) {
+	if (keymap == NULL) {
+		keyboard_unset_keymap(kb);
+		wl_signal_emit_mutable(&kb->events.keymap, kb);
+		return true;
 	}
+
+	struct xkb_state *xkb_state = xkb_state_new(keymap);
+	if (xkb_state == NULL) {
+		wlr_log(WLR_ERROR, "Failed to create XKB state");
+		return false;
+	}
+
+	char *keymap_str = xkb_keymap_get_as_string(keymap, XKB_KEYMAP_FORMAT_TEXT_V1);
+	if (keymap_str == NULL) {
+		wlr_log(WLR_ERROR, "Failed to get string version of keymap");
+		goto error_xkb_state;
+	}
+	size_t keymap_size = strlen(keymap_str) + 1;
+
+	int rw_fd = -1, ro_fd = -1;
+	if (!allocate_shm_file_pair(keymap_size, &rw_fd, &ro_fd)) {
+		wlr_log(WLR_ERROR, "Failed to allocate shm file for keymap");
+		goto error_keymap_str;
+	}
+
+	void *dst = mmap(NULL, keymap_size, PROT_READ | PROT_WRITE, MAP_SHARED, rw_fd, 0);
+	close(rw_fd);
+	if (dst == MAP_FAILED) {
+		wlr_log_errno(WLR_ERROR, "mmap failed");
+		close(ro_fd);
+		goto error_keymap_str;
+	}
+
+	memcpy(dst, keymap_str, keymap_size);
+	munmap(dst, keymap_size);
+
+	keyboard_unset_keymap(kb);
+	kb->keymap = xkb_keymap_ref(keymap);
+	kb->xkb_state = xkb_state;
+	kb->keymap_string = keymap_str;
+	kb->keymap_size = keymap_size;
+	kb->keymap_fd = ro_fd;
 
 	const char *led_names[WLR_LED_COUNT] = {
 		XKB_LED_NAME_NUM,
@@ -182,16 +250,6 @@ bool wlr_keyboard_set_keymap(struct wlr_keyboard *kb,
 		kb->mod_indexes[i] = xkb_map_mod_get_index(kb->keymap, mod_names[i]);
 	}
 
-	char *tmp_keymap_string = xkb_keymap_get_as_string(kb->keymap,
-		XKB_KEYMAP_FORMAT_TEXT_V1);
-	if (tmp_keymap_string == NULL) {
-		wlr_log(WLR_ERROR, "Failed to get string version of keymap");
-		goto err;
-	}
-	free(kb->keymap_string);
-	kb->keymap_string = tmp_keymap_string;
-	kb->keymap_size = strlen(kb->keymap_string) + 1;
-
 	for (size_t i = 0; i < kb->num_keycodes; ++i) {
 		xkb_keycode_t keycode = kb->keycodes[i] + 8;
 		xkb_state_update_key(kb->xkb_state, keycode, XKB_KEY_DOWN);
@@ -199,16 +257,14 @@ bool wlr_keyboard_set_keymap(struct wlr_keyboard *kb,
 
 	keyboard_modifier_update(kb);
 
-	wlr_signal_emit_safe(&kb->events.keymap, kb);
+	wl_signal_emit_mutable(&kb->events.keymap, kb);
+
 	return true;
 
-err:
-	xkb_state_unref(kb->xkb_state);
-	kb->xkb_state = NULL;
-	xkb_keymap_unref(keymap);
-	kb->keymap = NULL;
-	free(kb->keymap_string);
-	kb->keymap_string = NULL;
+error_keymap_str:
+	free(keymap_str);
+error_xkb_state:
+	xkb_state_unref(xkb_state);
 	return false;
 }
 
@@ -219,7 +275,7 @@ void wlr_keyboard_set_repeat_info(struct wlr_keyboard *kb, int32_t rate,
 	}
 	kb->repeat_info.rate = rate;
 	kb->repeat_info.delay = delay;
-	wlr_signal_emit_safe(&kb->events.repeat_info, kb);
+	wl_signal_emit_mutable(&kb->events.repeat_info, kb);
 }
 
 uint32_t wlr_keyboard_get_modifiers(struct wlr_keyboard *kb) {

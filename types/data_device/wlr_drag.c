@@ -4,11 +4,11 @@
 #include <strings.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
+#include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/util/log.h>
 #include "types/wlr_data_device.h"
-#include "util/signal.h"
 
 static void drag_handle_seat_client_destroy(struct wl_listener *listener,
 		void *data) {
@@ -55,14 +55,14 @@ static void drag_set_focus(struct wlr_drag *drag,
 		goto out;
 	}
 
-	if (!drag->source &&
+	if (!drag->source && drag->seat_client &&
 			wl_resource_get_client(surface->resource) !=
 			drag->seat_client->client) {
 		goto out;
 	}
 
 	struct wlr_seat_client *focus_client = wlr_seat_client_for_wl_client(
-		drag->seat_client->seat, wl_resource_get_client(surface->resource));
+		drag->seat, wl_resource_get_client(surface->resource));
 	if (!focus_client) {
 		goto out;
 	}
@@ -71,7 +71,7 @@ static void drag_set_focus(struct wlr_drag *drag,
 		drag->source->accepted = false;
 
 		uint32_t serial =
-			wl_display_next_serial(drag->seat_client->seat->display);
+			wl_display_next_serial(drag->seat->display);
 
 		struct wl_resource *device_resource;
 		wl_resource_for_each(device_resource, &focus_client->data_devices) {
@@ -103,20 +103,15 @@ static void drag_set_focus(struct wlr_drag *drag,
 	wl_signal_add(&focus_client->events.destroy, &drag->seat_client_destroy);
 
 out:
-	wlr_signal_emit_safe(&drag->events.focus, drag);
+	wl_signal_emit_mutable(&drag->events.focus, drag);
 }
 
-static void drag_icon_set_mapped(struct wlr_drag_icon *icon, bool mapped) {
-	if (mapped && !icon->mapped) {
-		icon->mapped = true;
-		wlr_signal_emit_safe(&icon->events.map, icon);
-	} else if (!mapped && icon->mapped) {
-		wlr_signal_emit_safe(&icon->events.unmap, icon);
-		icon->mapped = false;
-	}
+static void drag_icon_destroy(struct wlr_drag_icon *icon) {
+	icon->drag->icon = NULL;
+	wl_list_remove(&icon->surface_destroy.link);
+	wl_signal_emit_mutable(&icon->events.destroy, icon);
+	free(icon);
 }
-
-static void drag_icon_destroy(struct wlr_drag_icon *icon);
 
 static void drag_destroy(struct wlr_drag *drag) {
 	if (drag->cancelling) {
@@ -138,9 +133,6 @@ static void drag_destroy(struct wlr_drag *drag) {
 		}
 	}
 
-	// We issue destroy after ending the grab to allow focus changes.
-	wlr_signal_emit_safe(&drag->events.destroy, drag);
-
 	if (drag->started) {
 		drag_set_focus(drag, NULL, 0, 0);
 
@@ -148,11 +140,20 @@ static void drag_destroy(struct wlr_drag *drag) {
 		drag->seat->drag = NULL;
 	}
 
+	// We issue destroy after ending the grab to allow focus changes.
+	// Furthermore, we wait until after clearing the drag focus in order
+	// to ensure that the wl_data_device.leave is sent before emitting the
+	// signal. This allows e.g. wl_pointer.enter to be sent in the destroy
+	// signal handler.
+	wl_signal_emit_mutable(&drag->events.destroy, drag);
+
 	if (drag->source) {
 		wl_list_remove(&drag->source_destroy.link);
 	}
 
-	drag_icon_destroy(drag->icon);
+	if (drag->icon != NULL) {
+		drag_icon_destroy(drag->icon);
+	}
 	free(drag);
 }
 
@@ -183,7 +184,7 @@ static void drag_handle_pointer_motion(struct wlr_seat_pointer_grab *grab,
 			.sx = sx,
 			.sy = sy,
 		};
-		wlr_signal_emit_safe(&drag->events.motion, &event);
+		wl_signal_emit_mutable(&drag->events.motion, &event);
 	}
 }
 
@@ -204,7 +205,7 @@ static void drag_drop(struct wlr_drag *drag, uint32_t time) {
 		.drag = drag,
 		.time = time,
 	};
-	wlr_signal_emit_safe(&drag->events.drop, &event);
+	wl_signal_emit_mutable(&drag->events.drop, &event);
 }
 
 static uint32_t drag_handle_pointer_button(struct wlr_seat_pointer_grab *grab,
@@ -307,8 +308,8 @@ static const struct wlr_touch_grab_interface
 };
 
 static void drag_handle_keyboard_enter(struct wlr_seat_keyboard_grab *grab,
-		struct wlr_surface *surface, uint32_t keycodes[], size_t num_keycodes,
-		struct wlr_keyboard_modifiers *modifiers) {
+		struct wlr_surface *surface, const uint32_t keycodes[], size_t num_keycodes,
+		const struct wlr_keyboard_modifiers *modifiers) {
 	// nothing has keyboard focus during drags
 }
 
@@ -322,7 +323,7 @@ static void drag_handle_keyboard_key(struct wlr_seat_keyboard_grab *grab,
 }
 
 static void drag_handle_keyboard_modifiers(struct wlr_seat_keyboard_grab *grab,
-		struct wlr_keyboard_modifiers *modifiers) {
+		const struct wlr_keyboard_modifiers *modifiers) {
 	//struct wlr_keyboard *keyboard = grab->seat->keyboard_state.keyboard;
 	// TODO change the dnd action based on what modifier is pressed on the
 	// keyboard
@@ -353,17 +354,20 @@ static void drag_handle_drag_source_destroy(struct wl_listener *listener,
 	drag_destroy(drag);
 }
 
+static void drag_icon_surface_role_commit(struct wlr_surface *surface) {
+	assert(surface->role == &drag_icon_surface_role);
 
-static void drag_icon_destroy(struct wlr_drag_icon *icon) {
-	if (icon == NULL) {
-		return;
+	pixman_region32_clear(&surface->input_region);
+	if (wlr_surface_has_buffer(surface)) {
+		wlr_surface_map(surface);
 	}
-	drag_icon_set_mapped(icon, false);
-	wlr_signal_emit_safe(&icon->events.destroy, icon);
-	icon->surface->role_data = NULL;
-	wl_list_remove(&icon->surface_destroy.link);
-	free(icon);
 }
+
+const struct wlr_surface_role drag_icon_surface_role = {
+	.name = "wl_data_device-icon",
+	.no_object = true,
+	.commit = drag_icon_surface_role_commit,
+};
 
 static void drag_icon_handle_surface_destroy(struct wl_listener *listener,
 		void *data) {
@@ -372,24 +376,9 @@ static void drag_icon_handle_surface_destroy(struct wl_listener *listener,
 	drag_icon_destroy(icon);
 }
 
-static void drag_icon_surface_role_commit(struct wlr_surface *surface) {
-	assert(surface->role == &drag_icon_surface_role);
-	struct wlr_drag_icon *icon = surface->role_data;
-	if (icon == NULL) {
-		return;
-	}
-
-	drag_icon_set_mapped(icon, wlr_surface_has_buffer(surface));
-}
-
-const struct wlr_surface_role drag_icon_surface_role = {
-	.name = "wl_data_device-icon",
-	.commit = drag_icon_surface_role_commit,
-};
-
 static struct wlr_drag_icon *drag_icon_create(struct wlr_drag *drag,
 		struct wlr_surface *surface) {
-	struct wlr_drag_icon *icon = calloc(1, sizeof(struct wlr_drag_icon));
+	struct wlr_drag_icon *icon = calloc(1, sizeof(*icon));
 	if (!icon) {
 		return NULL;
 	}
@@ -397,26 +386,19 @@ static struct wlr_drag_icon *drag_icon_create(struct wlr_drag *drag,
 	icon->drag = drag;
 	icon->surface = surface;
 
-	wl_signal_init(&icon->events.map);
-	wl_signal_init(&icon->events.unmap);
 	wl_signal_init(&icon->events.destroy);
 
-	wl_signal_add(&icon->surface->events.destroy, &icon->surface_destroy);
 	icon->surface_destroy.notify = drag_icon_handle_surface_destroy;
+	wl_signal_add(&surface->events.destroy, &icon->surface_destroy);
 
-	icon->surface->role_data = icon;
-
-	if (wlr_surface_has_buffer(surface)) {
-		drag_icon_set_mapped(icon, true);
-	}
+	drag_icon_surface_role_commit(surface);
 
 	return icon;
 }
 
-
 struct wlr_drag *wlr_drag_create(struct wlr_seat_client *seat_client,
 		struct wlr_data_source *source, struct wlr_surface *icon_surface) {
-	struct wlr_drag *drag = calloc(1, sizeof(struct wlr_drag));
+	struct wlr_drag *drag = calloc(1, sizeof(*drag));
 	if (drag == NULL) {
 		return NULL;
 	}
@@ -475,7 +457,7 @@ void wlr_seat_request_start_drag(struct wlr_seat *seat, struct wlr_drag *drag,
 		.origin = origin,
 		.serial = serial,
 	};
-	wlr_signal_emit_safe(&seat->events.request_start_drag, &event);
+	wl_signal_emit_mutable(&seat->events.request_start_drag, &event);
 }
 
 static void seat_handle_drag_source_destroy(struct wl_listener *listener,
@@ -506,7 +488,7 @@ void wlr_seat_start_drag(struct wlr_seat *seat, struct wlr_drag *drag,
 		wl_signal_add(&drag->source->events.destroy, &seat->drag_source_destroy);
 	}
 
-	wlr_signal_emit_safe(&seat->events.start_drag, drag);
+	wl_signal_emit_mutable(&seat->events.start_drag, drag);
 }
 
 void wlr_seat_start_pointer_drag(struct wlr_seat *seat, struct wlr_drag *drag,

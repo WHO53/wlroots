@@ -14,13 +14,13 @@
 #include <time.h>
 #include <wayland-server-core.h>
 
+struct wlr_surface;
+
 struct wlr_output;
 struct wlr_output_event_present;
 
 struct wlr_presentation {
 	struct wl_global *global;
-	struct wl_list feedbacks; // wlr_presentation_feedback::link
-	clockid_t clock;
 
 	struct {
 		struct wl_signal destroy;
@@ -30,28 +30,15 @@ struct wlr_presentation {
 };
 
 struct wlr_presentation_feedback {
-	struct wlr_presentation *presentation;
-	struct wlr_surface *surface; // NULL if the surface has been destroyed
-	struct wl_list link; // wlr_presentation::feedbacks
+	struct wl_list resources; // wl_resource_get_link()
 
-	struct wl_list resources; // wl_resource_get_link
-
-	// The surface contents were committed.
-	bool committed;
-	// The surface contents were sampled by the compositor and are to be
-	// presented on the next flip. Can become true only after committed becomes
-	// true.
-	bool sampled;
-	bool presented;
-
-	// Only when the wlr_presentation_surface_sampled_on_output helper has been
-	// called
+	// Only when the wlr_presentation_surface_textured_on_output() or
+	// wlr_presentation_surface_scanned_out_on_output() helper has been called.
 	struct wlr_output *output;
 	bool output_committed;
 	uint32_t output_commit_seq;
+	bool zero_copy;
 
-	struct wl_listener surface_commit;
-	struct wl_listener surface_destroy;
 	struct wl_listener output_commit;
 	struct wl_listener output_present;
 	struct wl_listener output_destroy;
@@ -63,7 +50,7 @@ struct wlr_presentation_event {
 	uint32_t tv_nsec;
 	uint32_t refresh;
 	uint64_t seq;
-	uint32_t flags; // wp_presentation_feedback_kind
+	uint32_t flags; // enum wp_presentation_feedback_kind
 };
 
 struct wlr_backend;
@@ -77,8 +64,8 @@ struct wlr_presentation *wlr_presentation_create(struct wl_display *display,
  * contents (e.g. when rendering the surface's current texture, when
  * referencing its current buffer, or when directly scanning out its current
  * buffer). A wlr_presentation_feedback is returned. The compositor should call
- * wlr_presentation_feedback_send_presented if this content has been displayed,
- * then wlr_presentation_feedback_destroy.
+ * wlr_presentation_feedback_send_presented() if this content has been displayed,
+ * then wlr_presentation_feedback_destroy().
  *
  * NULL is returned if the client hasn't requested presentation feedback for
  * this surface.
@@ -87,25 +74,34 @@ struct wlr_presentation_feedback *wlr_presentation_surface_sampled(
 	struct wlr_presentation *presentation, struct wlr_surface *surface);
 void wlr_presentation_feedback_send_presented(
 	struct wlr_presentation_feedback *feedback,
-	struct wlr_presentation_event *event);
+	const struct wlr_presentation_event *event);
 void wlr_presentation_feedback_destroy(
 	struct wlr_presentation_feedback *feedback);
 
 /**
- * Fill a wlr_presentation_event from a wlr_output_event_present.
+ * Fill a wlr_presentation_event from a struct wlr_output_event_present.
  */
 void wlr_presentation_event_from_output(struct wlr_presentation_event *event,
 		const struct wlr_output_event_present *output_event);
 
 /**
- * Mark the current surface's buffer as sampled on the given output.
+ * Mark the current surface's buffer as textured on the given output.
  *
- * Instead of calling wlr_presentation_surface_sampled and managing the
- * wlr_presentation_feedback itself, the compositor can call this function
- * before a wlr_output_commit call to indicate that the surface's current
- * contents will be displayed on the output.
+ * Instead of calling wlr_presentation_surface_sampled() and managing the
+ * struct wlr_presentation_feedback itself, the compositor can call this function
+ * before a wlr_output_commit() call to indicate that the surface's current
+ * contents have been copied to a buffer which will be displayed on the output.
  */
-void wlr_presentation_surface_sampled_on_output(
+void wlr_presentation_surface_textured_on_output(
+	struct wlr_presentation *presentation, struct wlr_surface *surface,
+	struct wlr_output *output);
+/**
+ * Mark the current surface's buffer as scanned out on the given output.
+ *
+ * Same as wlr_presentation_surface_textured_on_output(), but indicates direct
+ * scan-out.
+ */
+void wlr_presentation_surface_scanned_out_on_output(
 	struct wlr_presentation *presentation, struct wlr_surface *surface,
 	struct wlr_output *output);
 

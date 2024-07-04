@@ -2,19 +2,21 @@
 #define BACKEND_DRM_UTIL_H
 
 #include <stdint.h>
-#include <wlr/types/wlr_output.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
+struct wlr_drm_connector;
+
 // Calculates a more accurate refresh rate (mHz) than what mode itself provides
 int32_t calculate_refresh_rate(const drmModeModeInfo *mode);
+enum wlr_output_mode_aspect_ratio get_picture_aspect_ratio(const drmModeModeInfo *mode);
+// Returns manufacturer based on pnp id
+const char *get_pnp_manufacturer(const char code[static 3]);
 // Populates the make/model/phys_{width,height} of output from the edid data
-void parse_edid(struct wlr_output *restrict output, size_t len,
-	const uint8_t *data);
-// Returns the string representation of a DRM output type
-const char *conn_get_name(uint32_t type_id);
-// Returns the DRM framebuffer id for a gbm_bo
-uint32_t get_fb_for_bo(struct gbm_bo *bo, bool with_modifiers);
+void parse_edid(struct wlr_drm_connector *conn, size_t len, const uint8_t *data);
+const char *drm_connector_status_str(drmModeConnection status);
+void generate_cvt_mode(drmModeModeInfo *mode, int hdisplay, int vdisplay,
+	float vrefresh);
 
 // Part of match_obj
 enum {

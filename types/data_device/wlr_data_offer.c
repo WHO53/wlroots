@@ -8,7 +8,6 @@
 #include <wlr/types/wlr_seat.h>
 #include <wlr/util/log.h>
 #include "types/wlr_data_device.h"
-#include "util/signal.h"
 
 static const struct wl_data_offer_interface data_offer_impl;
 
@@ -243,7 +242,7 @@ struct wlr_data_offer *data_offer_create(struct wl_resource *device_resource,
 	assert(seat_client != NULL);
 	assert(source != NULL); // a NULL source means no selection
 
-	struct wlr_data_offer *offer = calloc(1, sizeof(struct wlr_data_offer));
+	struct wlr_data_offer *offer = calloc(1, sizeof(*offer));
 	if (offer == NULL) {
 		return NULL;
 	}

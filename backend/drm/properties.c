@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+#include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -23,7 +25,12 @@ static const struct prop_info connector_info[] = {
 	{ "DPMS", INDEX(dpms) },
 	{ "EDID", INDEX(edid) },
 	{ "PATH", INDEX(path) },
+	{ "content type", INDEX(content_type) },
 	{ "link-status", INDEX(link_status) },
+	{ "max bpc", INDEX(max_bpc) },
+	{ "non-desktop", INDEX(non_desktop) },
+	{ "panel orientation", INDEX(panel_orientation) },
+	{ "subconnector", INDEX(subconnector) },
 	{ "vrr_capable", INDEX(vrr_capable) },
 #undef INDEX
 };
@@ -35,8 +42,6 @@ static const struct prop_info crtc_info[] = {
 	{ "GAMMA_LUT_SIZE", INDEX(gamma_lut_size) },
 	{ "MODE_ID", INDEX(mode_id) },
 	{ "VRR_ENABLED", INDEX(vrr_enabled) },
-	{ "rotation", INDEX(rotation) },
-	{ "scaling mode", INDEX(scaling_mode) },
 #undef INDEX
 };
 
@@ -47,12 +52,14 @@ static const struct prop_info plane_info[] = {
 	{ "CRTC_W", INDEX(crtc_w) },
 	{ "CRTC_X", INDEX(crtc_x) },
 	{ "CRTC_Y", INDEX(crtc_y) },
+	{ "FB_DAMAGE_CLIPS", INDEX(fb_damage_clips) },
 	{ "FB_ID", INDEX(fb_id) },
 	{ "IN_FORMATS", INDEX(in_formats) },
 	{ "SRC_H", INDEX(src_h) },
 	{ "SRC_W", INDEX(src_w) },
 	{ "SRC_X", INDEX(src_x) },
 	{ "SRC_Y", INDEX(src_y) },
+	{ "rotation", INDEX(rotation) },
 	{ "type", INDEX(type) },
 #undef INDEX
 };
@@ -151,4 +158,53 @@ void *get_drm_prop_blob(int fd, uint32_t obj, uint32_t prop, size_t *ret_len) {
 
 	drmModeFreePropertyBlob(blob);
 	return ptr;
+}
+
+char *get_drm_prop_enum(int fd, uint32_t obj, uint32_t prop_id) {
+	uint64_t value;
+	if (!get_drm_prop(fd, obj, prop_id, &value)) {
+		return NULL;
+	}
+
+	drmModePropertyRes *prop = drmModeGetProperty(fd, prop_id);
+	if (!prop) {
+		return NULL;
+	}
+
+	char *str = NULL;
+	for (int i = 0; i < prop->count_enums; i++) {
+		if (prop->enums[i].value == value) {
+			str = strdup(prop->enums[i].name);
+			break;
+		}
+	}
+
+	drmModeFreeProperty(prop);
+
+	return str;
+}
+
+bool introspect_drm_prop_range(int fd, uint32_t prop_id,
+		uint64_t *min, uint64_t *max) {
+	drmModePropertyRes *prop = drmModeGetProperty(fd, prop_id);
+	if (!prop) {
+		return false;
+	}
+
+	if (drmModeGetPropertyType(prop) != DRM_MODE_PROP_RANGE) {
+		drmModeFreeProperty(prop);
+		return false;
+	}
+
+	assert(prop->count_values == 2);
+
+	if (min != NULL) {
+		*min = prop->values[0];
+	}
+	if (max != NULL) {
+		*max = prop->values[1];
+	}
+
+	drmModeFreeProperty(prop);
+	return true;
 }

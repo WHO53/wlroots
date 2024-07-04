@@ -9,9 +9,8 @@
  * the layout and size of structs used by wlroots may change, requiring code
  * depending on this header to be recompiled (but not edited).
  *
- * Breaking changes are announced by email and follow a 1-year deprecation
- * schedule. Send an email to ~sircmpwn/wlroots-announce+subscribe@lists.sr.ht
- * to receive these announcements.
+ * Breaking changes are announced in the release notes and follow a 1-year
+ * deprecation schedule.
  */
 
 #ifndef WLR_TYPES_WLR_MATRIX_H
@@ -42,11 +41,6 @@ void wlr_matrix_rotate(float mat[static 9], float rad);
 /** Writes a transformation matrix which applies the specified
  *  wl_output_transform to mat */
 void wlr_matrix_transform(float mat[static 9],
-	enum wl_output_transform transform);
-
-/** Writes a 2D orthographic projection matrix to mat of (width, height) with a
- *  specified wl_output_transform*/
-void wlr_matrix_projection(float mat[static 9], int width, int height,
 	enum wl_output_transform transform);
 
 /** Shortcut for the various matrix operations involved in projecting the

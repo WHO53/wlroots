@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <types/wlr_tablet_v2.h>
 #include <wayland-util.h>
+#include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_tablet_tool.h>
 #include <wlr/types/wlr_tablet_v2.h>
 #include <wlr/util/log.h>
@@ -30,7 +31,7 @@ static void handle_tablet_v2_destroy(struct wl_client *client,
 	wl_resource_destroy(resource);
 }
 
-static struct zwp_tablet_v2_interface tablet_impl = {
+static const struct zwp_tablet_v2_interface tablet_impl = {
 	.destroy = handle_tablet_v2_destroy,
 };
 
@@ -59,8 +60,8 @@ struct wlr_tablet_v2_tablet *wlr_tablet_create(
 	if (!seat) {
 		return NULL;
 	}
-	struct wlr_tablet *wlr_tablet = wlr_device->tablet;
-	struct wlr_tablet_v2_tablet *tablet = calloc(1, sizeof(struct wlr_tablet_v2_tablet));
+	struct wlr_tablet *wlr_tablet = wlr_tablet_from_input_device(wlr_device);
+	struct wlr_tablet_v2_tablet *tablet = calloc(1, sizeof(*tablet));
 	if (!tablet) {
 		return NULL;
 	}
@@ -87,8 +88,7 @@ struct wlr_tablet_v2_tablet *wlr_tablet_create(
 
 void add_tablet_client(struct wlr_tablet_seat_client_v2 *seat,
 		struct wlr_tablet_v2_tablet *tablet) {
-	struct wlr_tablet_client_v2 *client =
-		calloc(1, sizeof(struct wlr_tablet_client_v2));
+	struct wlr_tablet_client_v2 *client = calloc(1, sizeof(*client));
 	if (!client) {
 		return;
 	}
@@ -107,16 +107,18 @@ void add_tablet_client(struct wlr_tablet_seat_client_v2 *seat,
 	zwp_tablet_seat_v2_send_tablet_added(seat->resource, client->resource);
 
 	// Send the expected events
-	if (tablet->wlr_tablet->name) {
+	if (tablet->wlr_tablet->base.name) {
 		zwp_tablet_v2_send_name(client->resource,
-			tablet->wlr_tablet->name);
+			tablet->wlr_tablet->base.name);
 	}
 	zwp_tablet_v2_send_id(client->resource,
 		tablet->wlr_device->vendor, tablet->wlr_device->product);
-	for (size_t i = 0; i < tablet->wlr_tablet->paths.length; ++i) {
-		zwp_tablet_v2_send_path(client->resource,
-			tablet->wlr_tablet->paths.items[i]);
+
+	const char **path_ptr;
+	wl_array_for_each(path_ptr, &tablet->wlr_tablet->paths) {
+		zwp_tablet_v2_send_path(client->resource, *path_ptr);
 	}
+
 	zwp_tablet_v2_send_done(client->resource);
 
 	client->client = seat->wl_client;

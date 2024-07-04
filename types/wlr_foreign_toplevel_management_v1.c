@@ -3,10 +3,10 @@
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
+#include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/util/log.h>
-#include "util/signal.h"
 #include "wlr-foreign-toplevel-management-unstable-v1-protocol.h"
 
 #define FOREIGN_TOPLEVEL_MANAGEMENT_V1_VERSION 3
@@ -32,7 +32,7 @@ static void toplevel_handle_send_maximized_event(struct wl_resource *resource,
 		.toplevel = toplevel,
 		.maximized = state,
 	};
-	wlr_signal_emit_safe(&toplevel->events.request_maximize, &event);
+	wl_signal_emit_mutable(&toplevel->events.request_maximize, &event);
 }
 
 static void foreign_toplevel_handle_set_maximized(struct wl_client *client,
@@ -57,7 +57,7 @@ static void toplevel_send_minimized_event(struct wl_resource *resource,
 		.toplevel = toplevel,
 		.minimized = state,
 	};
-	wlr_signal_emit_safe(&toplevel->events.request_minimize, &event);
+	wl_signal_emit_mutable(&toplevel->events.request_minimize, &event);
 }
 
 static void foreign_toplevel_handle_set_minimized(struct wl_client *client,
@@ -87,7 +87,7 @@ static void toplevel_send_fullscreen_event(struct wl_resource *resource,
 		.fullscreen = state,
 		.output = output,
 	};
-	wlr_signal_emit_safe(&toplevel->events.request_fullscreen, &event);
+	wl_signal_emit_mutable(&toplevel->events.request_fullscreen, &event);
 }
 
 static void foreign_toplevel_handle_set_fullscreen(struct wl_client *client,
@@ -107,13 +107,16 @@ static void foreign_toplevel_handle_activate(struct wl_client *client,
 	if (!toplevel) {
 		return;
 	}
-
 	struct wlr_seat_client *seat_client = wlr_seat_client_from_resource(seat);
+	if (!seat_client) {
+		return;
+	}
+
 	struct wlr_foreign_toplevel_handle_v1_activated_event event = {
 		.toplevel = toplevel,
 		.seat = seat_client->seat,
 	};
-	wlr_signal_emit_safe(&toplevel->events.request_activate, &event);
+	wl_signal_emit_mutable(&toplevel->events.request_activate, &event);
 }
 
 static void foreign_toplevel_handle_close(struct wl_client *client,
@@ -123,7 +126,7 @@ static void foreign_toplevel_handle_close(struct wl_client *client,
 	if (!toplevel) {
 		return;
 	}
-	wlr_signal_emit_safe(&toplevel->events.request_close, toplevel);
+	wl_signal_emit_mutable(&toplevel->events.request_close, toplevel);
 }
 
 static void foreign_toplevel_handle_set_rectangle(struct wl_client *client,
@@ -150,7 +153,7 @@ static void foreign_toplevel_handle_set_rectangle(struct wl_client *client,
 		.width = width,
 		.height = height,
 	};
-	wlr_signal_emit_safe(&toplevel->events.set_rectangle, &event);
+	wl_signal_emit_mutable(&toplevel->events.set_rectangle, &event);
 }
 
 static void foreign_toplevel_handle_destroy(struct wl_client *client,
@@ -195,6 +198,10 @@ void wlr_foreign_toplevel_handle_v1_set_title(
 		struct wlr_foreign_toplevel_handle_v1 *toplevel, const char *title) {
 	free(toplevel->title);
 	toplevel->title = strdup(title);
+	if (toplevel->title == NULL) {
+		wlr_log(WLR_ERROR, "failed to allocate memory for toplevel title");
+		return;
+	}
 
 	struct wl_resource *resource;
 	wl_resource_for_each(resource, &toplevel->resources) {
@@ -208,6 +215,10 @@ void wlr_foreign_toplevel_handle_v1_set_app_id(
 		struct wlr_foreign_toplevel_handle_v1 *toplevel, const char *app_id) {
 	free(toplevel->app_id);
 	toplevel->app_id = strdup(app_id);
+	if (toplevel->app_id == NULL) {
+		wlr_log(WLR_ERROR, "failed to allocate memory for toplevel app_id");
+		return;
+	}
 
 	struct wl_resource *resource;
 	wl_resource_for_each(resource, &toplevel->resources) {
@@ -245,6 +256,23 @@ static void toplevel_send_output(struct wlr_foreign_toplevel_handle_v1 *toplevel
 	toplevel_update_idle_source(toplevel);
 }
 
+static void toplevel_handle_output_bind(struct wl_listener *listener,
+		void *data) {
+	struct wlr_foreign_toplevel_handle_v1_output *toplevel_output =
+		wl_container_of(listener, toplevel_output, output_bind);
+	struct wlr_output_event_bind *event = data;
+	struct wl_client *client = wl_resource_get_client(event->resource);
+
+	struct wl_resource *resource;
+	wl_resource_for_each(resource, &toplevel_output->toplevel->resources) {
+		if (wl_resource_get_client(resource) == client) {
+			send_output_to_resource(resource, toplevel_output->output, true);
+		}
+	}
+
+	toplevel_update_idle_source(toplevel_output->toplevel);
+}
+
 static void toplevel_handle_output_destroy(struct wl_listener *listener,
 		void *data) {
 	struct wlr_foreign_toplevel_handle_v1_output *toplevel_output =
@@ -263,8 +291,7 @@ void wlr_foreign_toplevel_handle_v1_output_enter(
 		}
 	}
 
-	toplevel_output =
-		calloc(1, sizeof(struct wlr_foreign_toplevel_handle_v1_output));
+	toplevel_output = calloc(1, sizeof(*toplevel_output));
 	if (!toplevel_output) {
 		wlr_log(WLR_ERROR, "failed to allocate memory for toplevel output");
 		return;
@@ -273,6 +300,9 @@ void wlr_foreign_toplevel_handle_v1_output_enter(
 	toplevel_output->output = output;
 	toplevel_output->toplevel = toplevel;
 	wl_list_insert(&toplevel->outputs, &toplevel_output->link);
+
+	toplevel_output->output_bind.notify = toplevel_handle_output_bind;
+	wl_signal_add(&output->events.bind, &toplevel_output->output_bind);
 
 	toplevel_output->output_destroy.notify = toplevel_handle_output_destroy;
 	wl_signal_add(&output->events.destroy, &toplevel_output->output_destroy);
@@ -283,6 +313,7 @@ void wlr_foreign_toplevel_handle_v1_output_enter(
 static void toplevel_output_destroy(
 		struct wlr_foreign_toplevel_handle_v1_output *toplevel_output) {
 	wl_list_remove(&toplevel_output->link);
+	wl_list_remove(&toplevel_output->output_bind.link);
 	wl_list_remove(&toplevel_output->output_destroy.link);
 	free(toplevel_output);
 }
@@ -367,6 +398,10 @@ static void toplevel_send_state(struct wlr_foreign_toplevel_handle_v1 *toplevel)
 
 void wlr_foreign_toplevel_handle_v1_set_maximized(
 		struct wlr_foreign_toplevel_handle_v1 *toplevel, bool maximized) {
+	if (maximized == !!(toplevel->state &
+			WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MAXIMIZED)) {
+		return;
+	}
 	if (maximized) {
 		toplevel->state |= WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MAXIMIZED;
 	} else {
@@ -377,6 +412,10 @@ void wlr_foreign_toplevel_handle_v1_set_maximized(
 
 void wlr_foreign_toplevel_handle_v1_set_minimized(
 		struct wlr_foreign_toplevel_handle_v1 *toplevel, bool minimized) {
+	if (minimized == !!(toplevel->state &
+			WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MINIMIZED)) {
+		return;
+	}
 	if (minimized) {
 		toplevel->state |= WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MINIMIZED;
 	} else {
@@ -387,6 +426,10 @@ void wlr_foreign_toplevel_handle_v1_set_minimized(
 
 void wlr_foreign_toplevel_handle_v1_set_activated(
 		struct wlr_foreign_toplevel_handle_v1 *toplevel, bool activated) {
+	if (activated == !!(toplevel->state &
+			WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_ACTIVATED)) {
+		return;
+	}
 	if (activated) {
 		toplevel->state |= WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_ACTIVATED;
 	} else {
@@ -397,6 +440,10 @@ void wlr_foreign_toplevel_handle_v1_set_activated(
 
 void wlr_foreign_toplevel_handle_v1_set_fullscreen(
 		struct wlr_foreign_toplevel_handle_v1 * toplevel, bool fullscreen) {
+	if (fullscreen == !!(toplevel->state &
+			WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_FULLSCREEN)) {
+		return;
+	}
 	if (fullscreen) {
 		toplevel->state |= WLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_FULLSCREEN;
 	} else {
@@ -446,7 +493,7 @@ void wlr_foreign_toplevel_handle_v1_destroy(
 		return;
 	}
 
-	wlr_signal_emit_safe(&toplevel->events.destroy, toplevel);
+	wl_signal_emit_mutable(&toplevel->events.destroy, toplevel);
 
 	struct wl_resource *resource, *tmp;
 	wl_resource_for_each_safe(resource, tmp, &toplevel->resources) {
@@ -512,8 +559,7 @@ static struct wl_resource *create_toplevel_resource_for_resource(
 struct wlr_foreign_toplevel_handle_v1 *
 wlr_foreign_toplevel_handle_v1_create(
 		struct wlr_foreign_toplevel_manager_v1 *manager) {
-	struct wlr_foreign_toplevel_handle_v1 *toplevel = calloc(1,
-			sizeof(struct wlr_foreign_toplevel_handle_v1));
+	struct wlr_foreign_toplevel_handle_v1 *toplevel = calloc(1, sizeof(*toplevel));
 	if (!toplevel) {
 		return NULL;
 	}
@@ -629,7 +675,7 @@ static void foreign_toplevel_manager_bind(struct wl_client *client, void *data,
 static void handle_display_destroy(struct wl_listener *listener, void *data) {
 	struct wlr_foreign_toplevel_manager_v1 *manager =
 		wl_container_of(listener, manager, display_destroy);
-	wlr_signal_emit_safe(&manager->events.destroy, manager);
+	wl_signal_emit_mutable(&manager->events.destroy, manager);
 	wl_list_remove(&manager->display_destroy.link);
 	wl_global_destroy(manager->global);
 	free(manager);
@@ -637,8 +683,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 
 struct wlr_foreign_toplevel_manager_v1 *wlr_foreign_toplevel_manager_v1_create(
 		struct wl_display *display) {
-	struct wlr_foreign_toplevel_manager_v1 *manager = calloc(1,
-			sizeof(struct wlr_foreign_toplevel_manager_v1));
+	struct wlr_foreign_toplevel_manager_v1 *manager = calloc(1, sizeof(*manager));
 	if (!manager) {
 		return NULL;
 	}

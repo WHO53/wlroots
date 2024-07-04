@@ -4,10 +4,9 @@
 #include <string.h>
 #include <time.h>
 #include <wayland-server-core.h>
-#include <wlr/types/wlr_input_device.h>
+#include <wlr/types/wlr_compositor.h>
 #include <wlr/util/log.h>
 #include "types/wlr_seat.h"
-#include "util/signal.h"
 
 static uint32_t default_touch_down(struct wlr_seat_touch_grab *grab,
 		uint32_t time, struct wlr_touch_point *point) {
@@ -67,7 +66,6 @@ static const struct wl_touch_interface touch_impl = {
 };
 
 static void touch_handle_resource_destroy(struct wl_resource *resource) {
-	wl_list_remove(wl_resource_get_link(resource));
 	seat_client_destroy_touch(resource);
 }
 
@@ -84,7 +82,7 @@ void wlr_seat_touch_start_grab(struct wlr_seat *wlr_seat,
 	grab->seat = wlr_seat;
 	wlr_seat->touch_state.grab = grab;
 
-	wlr_signal_emit_safe(&wlr_seat->events.touch_grab_begin, grab);
+	wl_signal_emit_mutable(&wlr_seat->events.touch_grab_begin, grab);
 }
 
 void wlr_seat_touch_end_grab(struct wlr_seat *wlr_seat) {
@@ -92,7 +90,7 @@ void wlr_seat_touch_end_grab(struct wlr_seat *wlr_seat) {
 
 	if (grab != wlr_seat->touch_state.default_grab) {
 		wlr_seat->touch_state.grab = wlr_seat->touch_state.default_grab;
-		wlr_signal_emit_safe(&wlr_seat->events.touch_grab_end, grab);
+		wl_signal_emit_mutable(&wlr_seat->events.touch_grab_end, grab);
 		if (grab->interface->cancel) {
 			grab->interface->cancel(grab);
 		}
@@ -108,7 +106,7 @@ static void touch_point_clear_focus(struct wlr_touch_point *point) {
 }
 
 static void touch_point_destroy(struct wlr_touch_point *point) {
-	wlr_signal_emit_safe(&point->events.destroy, point);
+	wl_signal_emit_mutable(&point->events.destroy, point);
 
 	touch_point_clear_focus(point);
 	wl_list_remove(&point->surface_destroy.link);
@@ -146,7 +144,7 @@ static struct wlr_touch_point *touch_point_create(
 		return NULL;
 	}
 
-	struct wlr_touch_point *point = calloc(1, sizeof(struct wlr_touch_point));
+	struct wlr_touch_point *point = calloc(1, sizeof(*point));
 	if (!point) {
 		return NULL;
 	}
@@ -444,12 +442,20 @@ void seat_client_create_touch(struct wlr_seat_client *seat_client,
 	}
 }
 
-void seat_client_destroy_touch(struct wl_resource *resource) {
-	struct wlr_seat_client *seat_client =
-		seat_client_from_touch_resource(resource);
-	if (seat_client == NULL) {
+void seat_client_create_inert_touch(struct wl_client *client, uint32_t version,
+		uint32_t id) {
+	struct wl_resource *resource =
+		wl_resource_create(client, &wl_touch_interface, version, id);
+	if (!resource) {
+		wl_client_post_no_memory(client);
 		return;
 	}
+	wl_resource_set_implementation(resource, &touch_impl, NULL, NULL);
+}
+
+void seat_client_destroy_touch(struct wl_resource *resource) {
+	wl_list_remove(wl_resource_get_link(resource));
+	wl_list_init(wl_resource_get_link(resource));
 	wl_resource_set_user_data(resource, NULL);
 }
 

@@ -3,14 +3,17 @@ wlroots reads these environment variables
 # wlroots specific
 
 * *WLR_BACKENDS*: comma-separated list of backends to use (available backends:
-  libinput, drm, wayland, x11, headless, noop)
+  libinput, drm, wayland, x11, headless)
 * *WLR_NO_HARDWARE_CURSORS*: set to 1 to use software cursors instead of
   hardware cursors
-* *WLR_SESSION*: specifies the wlr\_session to be used (available sessions:
-  logind/systemd, direct)
-* *WLR_DIRECT_TTY*: specifies the tty to be used (instead of using /dev/tty)
 * *WLR_XWAYLAND*: specifies the path to an Xwayland binary to be used (instead
   of following shell search semantics for "Xwayland")
+* *WLR_RENDERER*: forces the creation of a specified renderer (available
+  renderers: gles2, pixman, vulkan)
+* *WLR_RENDER_DRM_DEVICE*: specifies the DRM node to use for
+  hardware-accelerated renderers.
+* *WLR_EGL_NO_MODIFIERS*: set to 1 to disable format modifiers in EGL, this can
+  be used to understand and work around driver bugs.
 
 ## DRM backend
 
@@ -21,6 +24,8 @@ wlroots reads these environment variables
   mode setting
 * *WLR_DRM_NO_MODIFIERS*: set to 1 to always allocate planes without modifiers,
   this can fix certain modeset failures because of bandwidth restrictions.
+* *WLR_DRM_FORCE_LIBLIFTOFF*: set to 1 to force libliftoff (by default,
+  libliftoff is never used)
 
 ## Headless backend
 
@@ -39,10 +44,25 @@ wlroots reads these environment variables
 
 * *WLR_X11_OUTPUTS*: when using the X11 backend specifies the number of outputs
 
+## gles2 renderer
+
+* *WLR_RENDERER_ALLOW_SOFTWARE*: allows the gles2 renderer to use software
+  rendering
+
+## scenes
+
+* *WLR_SCENE_DEBUG_DAMAGE*: specifies debug options for screen damage related
+  tasks for compositors that use scenes (available options: none, rerender,
+  highlight)
+* *WLR_SCENE_DISABLE_DIRECT_SCANOUT*: disables direct scan-out for debugging.
+* *WLR_SCENE_DISABLE_VISIBILITY*: If set to 1, the visibility of all scene nodes
+  will be considered to be the full node. Intelligent visibility canculations will
+  be disabled.
+
 # Generic
 
-* *DISPLAY*: if set probe X11 backend in *wlr_backend_autocreate*
-* *WAYLAND_DISPLAY*, *_WAYLAND_DISPLAY*, *WAYLAND_SOCKET*: if set probe Wayland
-  backend in *wlr_backend_autocreate*
+* *DISPLAY*: if set probe X11 backend in `wlr_backend_autocreate`
+* *WAYLAND_DISPLAY*, *WAYLAND_SOCKET*: if set probe Wayland backend in
+  `wlr_backend_autocreate`
 * *XCURSOR_PATH*: directory where xcursors are located
 * *XDG_SESSION_ID*: if set, session ID used by the logind session

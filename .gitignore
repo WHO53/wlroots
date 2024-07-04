@@ -1,12 +1,4 @@
-.clang_complete
-*.o
-*.a
-bin/
-test/
-build/
-build-*/
-wayland-*-protocol.*
-wlr-example.ini
+/subprojects/
 
 # Added by Droidian
 !.circleci/

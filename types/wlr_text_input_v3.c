@@ -4,10 +4,10 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <stddef.h>
+#include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_text_input_v3.h>
 #include <wlr/util/log.h>
 #include "text-input-unstable-v3-protocol.h"
-#include "util/signal.h"
 
 static void text_input_clear_focused_surface(struct wlr_text_input_v3 *text_input) {
 	wl_list_remove(&text_input->surface_destroy.link);
@@ -42,7 +42,7 @@ void wlr_text_input_v3_send_leave(struct wlr_text_input_v3 *text_input) {
 }
 
 void wlr_text_input_v3_send_preedit_string(struct wlr_text_input_v3 *text_input,
-		const char *text, uint32_t cursor_begin, uint32_t cursor_end) {
+		const char *text, int32_t cursor_begin, int32_t cursor_end) {
 	zwp_text_input_v3_send_preedit_string(text_input->resource, text,
 		cursor_begin, cursor_end);
 }
@@ -65,10 +65,10 @@ void wlr_text_input_v3_send_done(struct wlr_text_input_v3 *text_input) {
 }
 
 static void wlr_text_input_destroy(struct wlr_text_input_v3 *text_input) {
-	wlr_signal_emit_safe(&text_input->events.destroy, text_input);
+	wl_signal_emit_mutable(&text_input->events.destroy, text_input);
 	text_input_clear_focused_surface(text_input);
 	wl_list_remove(&text_input->seat_destroy.link);
-	// remove from manager::text_inputs
+	// remove from manager.text_inputs
 	wl_list_remove(&text_input->link);
 	free(text_input->current.surrounding.text);
 	free(text_input->pending.surrounding.text);
@@ -171,6 +171,10 @@ static void text_input_commit(struct wl_client *client,
 	if (text_input->pending.surrounding.text) {
 		text_input->current.surrounding.text =
 			strdup(text_input->pending.surrounding.text);
+		if (text_input->current.surrounding.text == NULL) {
+			wl_client_post_no_memory(client);
+			return;
+		}
 	}
 
 	bool old_enabled = text_input->current_enabled;
@@ -183,12 +187,12 @@ static void text_input_commit(struct wl_client *client,
 
 	if (!old_enabled && text_input->current_enabled) {
 		text_input->active_features	= text_input->current.features;
-		wlr_signal_emit_safe(&text_input->events.enable, text_input);
+		wl_signal_emit_mutable(&text_input->events.enable, text_input);
 	} else if (old_enabled && !text_input->current_enabled) {
 		text_input->active_features	= 0;
-		wlr_signal_emit_safe(&text_input->events.disable, text_input);
+		wl_signal_emit_mutable(&text_input->events.disable, text_input);
 	} else { // including never enabled
-		wlr_signal_emit_safe(&text_input->events.commit, text_input);
+		wl_signal_emit_mutable(&text_input->events.commit, text_input);
 	}
 }
 
@@ -235,8 +239,22 @@ static void text_input_handle_focused_surface_destroy(
 
 static void text_input_manager_get_text_input(struct wl_client *client,
 		struct wl_resource *resource, uint32_t id, struct wl_resource *seat) {
-	struct wlr_text_input_v3 *text_input =
-		calloc(1, sizeof(struct wlr_text_input_v3));
+	int version = wl_resource_get_version(resource);
+	struct wl_resource *text_input_resource = wl_resource_create(client,
+		&zwp_text_input_v3_interface, version, id);
+	if (text_input_resource == NULL) {
+		wl_client_post_no_memory(client);
+		return;
+	}
+	wl_resource_set_implementation(text_input_resource, &text_input_impl,
+		NULL, text_input_resource_destroy);
+
+	struct wlr_seat_client *seat_client = wlr_seat_client_from_resource(seat);
+	if (seat_client == NULL) {
+		return;
+	}
+
+	struct wlr_text_input_v3 *text_input = calloc(1, sizeof(*text_input));
 	if (text_input == NULL) {
 		wl_client_post_no_memory(client);
 		return;
@@ -247,20 +265,9 @@ static void text_input_manager_get_text_input(struct wl_client *client,
 	wl_signal_init(&text_input->events.disable);
 	wl_signal_init(&text_input->events.destroy);
 
-	int version = wl_resource_get_version(resource);
-	struct wl_resource *text_input_resource = wl_resource_create(client,
-		&zwp_text_input_v3_interface, version, id);
-	if (text_input_resource == NULL) {
-		free(text_input);
-		wl_client_post_no_memory(client);
-		return;
-	}
 	text_input->resource = text_input_resource;
+	wl_resource_set_user_data(text_input_resource, text_input);
 
-	wl_resource_set_implementation(text_input->resource, &text_input_impl,
-		text_input, text_input_resource_destroy);
-
-	struct wlr_seat_client *seat_client = wlr_seat_client_from_resource(seat);
 	struct wlr_seat *wlr_seat = seat_client->seat;
 	text_input->seat = wlr_seat;
 	wl_signal_add(&seat_client->events.destroy,
@@ -275,7 +282,7 @@ static void text_input_manager_get_text_input(struct wl_client *client,
 		text_input_manager_from_resource(resource);
 	wl_list_insert(&manager->text_inputs, &text_input->link);
 
-	wlr_signal_emit_safe(&manager->events.text_input, text_input);
+	wl_signal_emit_mutable(&manager->events.text_input, text_input);
 }
 
 static const struct zwp_text_input_manager_v3_interface
@@ -287,7 +294,6 @@ static const struct zwp_text_input_manager_v3_interface
 static void text_input_manager_bind(struct wl_client *wl_client, void *data,
 		uint32_t version, uint32_t id) {
 	struct wlr_text_input_manager_v3 *manager = data;
-	assert(wl_client && manager);
 
 	struct wl_resource *resource = wl_resource_create(wl_client,
 		&zwp_text_input_manager_v3_interface, version, id);
@@ -302,7 +308,7 @@ static void text_input_manager_bind(struct wl_client *wl_client, void *data,
 static void handle_display_destroy(struct wl_listener *listener, void *data) {
 	struct wlr_text_input_manager_v3 *manager =
 		wl_container_of(listener, manager, display_destroy);
-	wlr_signal_emit_safe(&manager->events.destroy, manager);
+	wl_signal_emit_mutable(&manager->events.destroy, manager);
 	wl_list_remove(&manager->display_destroy.link);
 	wl_global_destroy(manager->global);
 	free(manager);
@@ -310,8 +316,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 
 struct wlr_text_input_manager_v3 *wlr_text_input_manager_v3_create(
 		struct wl_display *display) {
-	struct wlr_text_input_manager_v3 *manager =
-		calloc(1, sizeof(struct wlr_text_input_manager_v3));
+	struct wlr_text_input_manager_v3 *manager = calloc(1, sizeof(*manager));
 	if (!manager) {
 		return NULL;
 	}

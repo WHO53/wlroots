@@ -1,12 +1,25 @@
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wayland-server-core.h>
 #include <wlr/interfaces/wlr_touch.h>
 #include <wlr/types/wlr_touch.h>
 
+#include "interfaces/wlr_input_device.h"
+
+struct wlr_touch *wlr_touch_from_input_device(
+		struct wlr_input_device *input_device) {
+	assert(input_device->type == WLR_INPUT_DEVICE_TOUCH);
+	return wl_container_of(input_device, (struct wlr_touch *)NULL, base);
+}
+
 void wlr_touch_init(struct wlr_touch *touch,
-		const struct wlr_touch_impl *impl) {
-	touch->impl = impl;
+		const struct wlr_touch_impl *impl, const char *name) {
+	*touch = (struct wlr_touch){
+		.impl = impl,
+	};
+	wlr_input_device_init(&touch->base, WLR_INPUT_DEVICE_TOUCH, name);
+
 	wl_signal_init(&touch->events.down);
 	wl_signal_init(&touch->events.up);
 	wl_signal_init(&touch->events.motion);
@@ -14,10 +27,8 @@ void wlr_touch_init(struct wlr_touch *touch,
 	wl_signal_init(&touch->events.frame);
 }
 
-void wlr_touch_destroy(struct wlr_touch *touch) {
-	if (touch && touch->impl && touch->impl->destroy) {
-		touch->impl->destroy(touch);
-	} else {
-		free(touch);
-	}
+void wlr_touch_finish(struct wlr_touch *touch) {
+	wlr_input_device_finish(&touch->base);
+
+	free(touch->output_name);
 }

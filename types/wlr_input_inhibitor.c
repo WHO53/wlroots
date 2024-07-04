@@ -4,10 +4,9 @@
 #include <wayland-server-core.h>
 #include "wlr/types/wlr_input_inhibitor.h"
 #include "wlr-input-inhibitor-unstable-v1-protocol.h"
-#include "util/signal.h"
 
 static const struct zwlr_input_inhibit_manager_v1_interface inhibit_manager_implementation;
-static struct zwlr_input_inhibitor_v1_interface input_inhibitor_implementation;
+static const struct zwlr_input_inhibitor_v1_interface input_inhibitor_implementation;
 
 static struct wlr_input_inhibit_manager *input_inhibit_manager_from_resource(
 		struct wl_resource *resource) {
@@ -27,7 +26,7 @@ static void input_inhibit_manager_deactivate(
 	}
 	manager->active_client = NULL;
 	manager->active_inhibitor = NULL;
-	wlr_signal_emit_safe(&manager->events.deactivate, manager);
+	wl_signal_emit_mutable(&manager->events.deactivate, manager);
 }
 
 static void input_inhibitor_destroy(struct wl_client *client,
@@ -44,7 +43,7 @@ static void input_inhibitor_resource_destroy(struct wl_resource *resource) {
 	input_inhibit_manager_deactivate(manager);
 }
 
-static struct zwlr_input_inhibitor_v1_interface input_inhibitor_implementation = {
+static const struct zwlr_input_inhibitor_v1_interface input_inhibitor_implementation = {
 	.destroy = input_inhibitor_destroy,
 };
 
@@ -71,7 +70,7 @@ static void inhibit_manager_get_inhibitor(struct wl_client *client,
 	manager->active_client = client;
 	manager->active_inhibitor = wl_resource;
 
-	wlr_signal_emit_safe(&manager->events.activate, manager);
+	wl_signal_emit_mutable(&manager->events.activate, manager);
 }
 
 static const struct zwlr_input_inhibit_manager_v1_interface inhibit_manager_implementation = {
@@ -90,7 +89,6 @@ static void input_manager_resource_destroy(struct wl_resource *resource) {
 static void inhibit_manager_bind(struct wl_client *wl_client, void *data,
 		uint32_t version, uint32_t id) {
 	struct wlr_input_inhibit_manager *manager = data;
-	assert(wl_client && manager);
 
 	struct wl_resource *wl_resource = wl_resource_create(wl_client,
 		&zwlr_input_inhibit_manager_v1_interface, version, id);
@@ -106,7 +104,7 @@ static void inhibit_manager_bind(struct wl_client *wl_client, void *data,
 static void handle_display_destroy(struct wl_listener *listener, void *data) {
 	struct wlr_input_inhibit_manager *manager =
 		wl_container_of(listener, manager, display_destroy);
-	wlr_signal_emit_safe(&manager->events.destroy, manager);
+	wl_signal_emit_mutable(&manager->events.destroy, manager);
 	wl_list_remove(&manager->display_destroy.link);
 	wl_global_destroy(manager->global);
 	free(manager);
@@ -115,8 +113,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 struct wlr_input_inhibit_manager *wlr_input_inhibit_manager_create(
 		struct wl_display *display) {
 	// TODO: Client destroy
-	struct wlr_input_inhibit_manager *manager =
-		calloc(1, sizeof(struct wlr_input_inhibit_manager));
+	struct wlr_input_inhibit_manager *manager = calloc(1, sizeof(*manager));
 	if (!manager) {
 		return NULL;
 	}

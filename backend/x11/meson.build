@@ -1,22 +1,23 @@
 x11_libs = []
 x11_required = [
-	'x11-xcb',
 	'xcb',
-	'xcb-xinput',
+	'xcb-dri3',
+	'xcb-present',
+	'xcb-render',
+	'xcb-renderutil',
+	'xcb-shm',
 	'xcb-xfixes',
+	'xcb-xinput',
 ]
 
-msg = []
-if get_option('x11-backend').enabled()
-	msg += 'Install "@0@" or pass "-Dx11-backend=disabled" to disable it.'
-endif
-if not get_option('x11-backend').disabled()
-	msg += 'Required for X11 backend support.'
+msg = ['Required for X11 backend support.']
+if 'x11' in backends
+	msg += 'Install "@0@" or disable the X11 backend.'
 endif
 
 foreach lib : x11_required
 	dep = dependency(lib,
-		required: get_option('x11-backend'),
+		required: 'x11' in backends,
 		not_found_message: '\n'.join(msg).format(lib),
 	)
 	if not dep.found()
@@ -32,4 +33,4 @@ wlr_files += files(
 	'output.c',
 )
 wlr_deps += x11_libs
-conf_data.set10('WLR_HAS_X11_BACKEND', true)
+features += { 'x11-backend': true }

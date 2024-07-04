@@ -5,13 +5,12 @@
 #include <wlr/config.h>
 #include <wlr/xwayland.h>
 #include <xcb/render.h>
-#if WLR_HAS_XCB_ICCCM
-#include <xcb/xcb_icccm.h>
-#endif
-#if WLR_HAS_XCB_ERRORS
+#include "config.h"
+#include "xwayland/selection.h"
+
+#if HAVE_XCB_ERRORS
 #include <xcb/xcb_errors.h>
 #endif
-#include "xwayland/selection.h"
 
 /* This is in xcb/xcb_event.h, but pulling xcb-util just for a constant
  * others redefine anyway is meh
@@ -20,6 +19,7 @@
 
 enum atom_name {
 	WL_SURFACE_ID,
+	WL_SURFACE_SERIAL,
 	WM_DELETE_WINDOW,
 	WM_PROTOCOLS,
 	WM_HINTS,
@@ -34,6 +34,7 @@ enum atom_name {
 	NET_WM_PID,
 	NET_WM_NAME,
 	NET_WM_STATE,
+	NET_WM_STRUT_PARTIAL,
 	NET_WM_WINDOW_TYPE,
 	WM_TAKE_FOCUS,
 	WINDOW,
@@ -86,15 +87,9 @@ enum atom_name {
 	DND_ACTION_ASK,
 	DND_ACTION_PRIVATE,
 	NET_CLIENT_LIST,
+	NET_CLIENT_LIST_STACKING,
+	NET_WORKAREA,
 	ATOM_LAST // keep last
-};
-
-extern const char *atom_map[ATOM_LAST];
-
-enum net_wm_state_action {
-	NET_WM_STATE_REMOVE = 0,
-	NET_WM_STATE_ADD = 1,
-	NET_WM_STATE_TOGGLE = 2,
 };
 
 struct wlr_xwm {
@@ -112,30 +107,33 @@ struct wlr_xwm {
 	xcb_render_pictformat_t render_format_id;
 	xcb_cursor_t cursor;
 
-	xcb_window_t selection_window;
 	struct wlr_xwm_selection clipboard_selection;
 	struct wlr_xwm_selection primary_selection;
-
-	xcb_window_t dnd_window;
 	struct wlr_xwm_selection dnd_selection;
 
 	struct wlr_xwayland_surface *focus_surface;
 
-	struct wl_list surfaces; // wlr_xwayland_surface::link
-	struct wl_list unpaired_surfaces; // wlr_xwayland_surface::unpaired_link
+	// Surfaces in creation order
+	struct wl_list surfaces; // wlr_xwayland_surface.link
+	// Surfaces in bottom-to-top stacking order, for _NET_CLIENT_LIST_STACKING
+	struct wl_list surfaces_in_stack_order; // wlr_xwayland_surface.stack_link
+	struct wl_list unpaired_surfaces; // wlr_xwayland_surface.unpaired_link
 	struct wl_list pending_startup_ids; // pending_startup_id
 
 	struct wlr_drag *drag;
 	struct wlr_xwayland_surface *drag_focus;
 
 	const xcb_query_extension_reply_t *xfixes;
-#if WLR_HAS_XCB_ERRORS
+	const xcb_query_extension_reply_t *xres;
+	uint32_t xfixes_major_version;
+#if HAVE_XCB_ERRORS
 	xcb_errors_context_t *errors_context;
 #endif
 	unsigned int last_focus_seq;
 
 	struct wl_listener compositor_new_surface;
 	struct wl_listener compositor_destroy;
+	struct wl_listener shell_v1_new_surface;
 	struct wl_listener seat_set_selection;
 	struct wl_listener seat_set_primary_selection;
 	struct wl_listener seat_start_drag;

@@ -4,11 +4,11 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <wayland-server-core.h>
+#include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
 #include <wlr/types/wlr_region.h>
 #include <wlr/util/box.h>
 #include <wlr/util/log.h>
-#include "util/signal.h"
 
 static const struct zwp_locked_pointer_v1_interface locked_pointer_impl;
 static const struct zwp_confined_pointer_v1_interface confined_pointer_impl;
@@ -46,7 +46,7 @@ static void pointer_constraint_destroy(struct wlr_pointer_constraint_v1 *constra
 
 	wlr_log(WLR_DEBUG, "destroying constraint %p", constraint);
 
-	wlr_signal_emit_safe(&constraint->events.destroy, constraint);
+	wl_signal_emit_mutable(&constraint->events.destroy, constraint);
 
 	wl_resource_set_user_data(constraint->resource, NULL);
 	wl_list_remove(&constraint->link);
@@ -72,7 +72,7 @@ static void pointer_constraint_set_region(
 	pixman_region32_clear(&constraint->pending.region);
 
 	if (region_resource) {
-		pixman_region32_t *region = wlr_region_from_resource(region_resource);
+		const pixman_region32_t *region = wlr_region_from_resource(region_resource);
 		pixman_region32_copy(&constraint->pending.region, region);
 	}
 
@@ -129,7 +129,7 @@ static void pointer_constraint_commit(
 	}
 
 	if (updated_region) {
-		wlr_signal_emit_safe(&constraint->events.set_region, NULL);
+		wl_signal_emit_mutable(&constraint->events.set_region, NULL);
 	}
 }
 
@@ -176,17 +176,8 @@ static void pointer_constraint_create(struct wl_client *client,
 		pointer_constraints_from_resource(pointer_constraints_resource);
 
 	struct wlr_surface *surface = wlr_surface_from_resource(surface_resource);
-	struct wlr_seat *seat =
-		wlr_seat_client_from_pointer_resource(pointer_resource)->seat;
-
-	if (wlr_pointer_constraints_v1_constraint_for_surface(pointer_constraints,
-			surface, seat)) {
-		wl_resource_post_error(pointer_constraints_resource,
-			ZWP_POINTER_CONSTRAINTS_V1_ERROR_ALREADY_CONSTRAINED,
-			"a pointer constraint with a wl_pointer of the same wl_seat"
-			" is already on this surface");
-		return;
-	}
+	struct wlr_seat_client *seat_client =
+		wlr_seat_client_from_pointer_resource(pointer_resource);
 
 	uint32_t version = wl_resource_get_version(pointer_constraints_resource);
 
@@ -197,6 +188,28 @@ static void pointer_constraint_create(struct wl_client *client,
 		wl_resource_create(client, &zwp_confined_pointer_v1_interface, version, id);
 	if (resource == NULL) {
 		wl_client_post_no_memory(client);
+		return;
+	}
+
+	void *impl = locked_pointer ?
+		(void *)&locked_pointer_impl : (void *)&confined_pointer_impl;
+	wl_resource_set_implementation(resource, impl, NULL,
+		pointer_constraint_destroy_resource);
+
+	if (seat_client == NULL) {
+		// Leave the resource inert
+		return;
+	}
+
+	struct wlr_seat *seat = seat_client->seat;
+
+	if (wlr_pointer_constraints_v1_constraint_for_surface(pointer_constraints,
+			surface, seat)) {
+		wl_resource_destroy(resource);
+		wl_resource_post_error(pointer_constraints_resource,
+			ZWP_POINTER_CONSTRAINTS_V1_ERROR_ALREADY_CONSTRAINED,
+			"a pointer constraint with a wl_pointer of the same wl_seat"
+			" is already on this surface");
 		return;
 	}
 
@@ -234,10 +247,7 @@ static void pointer_constraint_create(struct wl_client *client,
 	constraint->seat_destroy.notify = handle_seat_destroy;
 	wl_signal_add(&seat->events.destroy, &constraint->seat_destroy);
 
-	void *impl = locked_pointer ?
-		(void *)&locked_pointer_impl : (void *)&confined_pointer_impl;
-	wl_resource_set_implementation(constraint->resource, impl, constraint,
-		pointer_constraint_destroy_resource);
+	wl_resource_set_user_data(resource, constraint);
 
 	wlr_log(WLR_DEBUG, "new %s_pointer %p (res %p)",
 		locked_pointer ? "locked" : "confined",
@@ -245,7 +255,7 @@ static void pointer_constraint_create(struct wl_client *client,
 
 	wl_list_insert(&pointer_constraints->constraints, &constraint->link);
 
-	wlr_signal_emit_safe(&pointer_constraints->events.new_constraint,
+	wl_signal_emit_mutable(&pointer_constraints->events.new_constraint,
 		constraint);
 }
 
@@ -276,7 +286,6 @@ static const struct zwp_pointer_constraints_v1_interface
 static void pointer_constraints_bind(struct wl_client *client, void *data,
 		uint32_t version, uint32_t id) {
 	struct wlr_pointer_constraints_v1 *pointer_constraints = data;
-	assert(client && pointer_constraints);
 
 	struct wl_resource *resource = wl_resource_create(client,
 		&zwp_pointer_constraints_v1_interface, version, id);

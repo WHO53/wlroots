@@ -2,6 +2,7 @@
 #define BACKEND_DRM_PROPERTIES_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /*
@@ -17,6 +18,11 @@ union wlr_drm_connector_props {
 		uint32_t link_status; // not guaranteed to exist
 		uint32_t path;
 		uint32_t vrr_capable; // not guaranteed to exist
+		uint32_t subconnector; // not guaranteed to exist
+		uint32_t non_desktop;
+		uint32_t panel_orientation; // not guaranteed to exist
+		uint32_t content_type; // not guaranteed to exist
+		uint32_t max_bpc; // not guaranteed to exist
 
 		// atomic-modesetting only
 
@@ -28,8 +34,6 @@ union wlr_drm_connector_props {
 union wlr_drm_crtc_props {
 	struct {
 		// Neither of these are guaranteed to exist
-		uint32_t rotation;
-		uint32_t scaling_mode;
 		uint32_t vrr_enabled;
 		uint32_t gamma_lut;
 		uint32_t gamma_lut_size;
@@ -60,8 +64,9 @@ union wlr_drm_plane_props {
 		uint32_t crtc_h;
 		uint32_t fb_id;
 		uint32_t crtc_id;
+		uint32_t fb_damage_clips;
 	};
-	uint32_t props[13];
+	uint32_t props[14];
 };
 
 bool get_drm_connector_props(int fd, uint32_t id,
@@ -71,5 +76,9 @@ bool get_drm_plane_props(int fd, uint32_t id, union wlr_drm_plane_props *out);
 
 bool get_drm_prop(int fd, uint32_t obj, uint32_t prop, uint64_t *ret);
 void *get_drm_prop_blob(int fd, uint32_t obj, uint32_t prop, size_t *ret_len);
+char *get_drm_prop_enum(int fd, uint32_t obj, uint32_t prop);
+
+bool introspect_drm_prop_range(int fd, uint32_t prop_id,
+	uint64_t *min, uint64_t *max);
 
 #endif

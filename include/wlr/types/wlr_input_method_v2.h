@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <wayland-server-core.h>
 #include <wlr/types/wlr_seat.h>
+#include <wlr/util/box.h>
 
 struct wlr_input_method_v2_preedit_string {
 	char *text;
@@ -42,6 +43,7 @@ struct wlr_input_method_v2 {
 	bool client_active; // state known to the client
 	uint32_t current_serial; // received in last commit call
 
+	struct wl_list popup_surfaces;
 	struct wlr_input_method_keyboard_grab_v2 *keyboard_grab;
 
 	struct wl_list link;
@@ -49,10 +51,25 @@ struct wlr_input_method_v2 {
 	struct wl_listener seat_client_destroy;
 
 	struct {
-		struct wl_signal commit; // (struct wlr_input_method_v2*)
-		struct wl_signal grab_keyboard; // (struct wlr_input_method_keyboard_grab_v2*)
-		struct wl_signal destroy; // (struct wlr_input_method_v2*)
+		struct wl_signal commit; // struct wlr_input_method_v2
+		struct wl_signal new_popup_surface; // struct wlr_input_popup_surface_v2
+		struct wl_signal grab_keyboard; // struct wlr_input_method_keyboard_grab_v2
+		struct wl_signal destroy; // struct wlr_input_method_v2
 	} events;
+};
+
+struct wlr_input_popup_surface_v2 {
+	struct wl_resource *resource;
+	struct wlr_input_method_v2 *input_method;
+	struct wl_list link;
+
+	struct wlr_surface *surface;
+
+	struct {
+		struct wl_signal destroy;
+	} events;
+
+	void *data;
 };
 
 struct wlr_input_method_keyboard_grab_v2 {
@@ -65,19 +82,19 @@ struct wlr_input_method_keyboard_grab_v2 {
 	struct wl_listener keyboard_destroy;
 
 	struct {
-		struct wl_signal destroy; // (struct wlr_input_method_keyboard_grab_v2*)
+		struct wl_signal destroy; // struct wlr_input_method_keyboard_grab_v2
 	} events;
 };
 
 struct wlr_input_method_manager_v2 {
 	struct wl_global *global;
-	struct wl_list input_methods; // struct wlr_input_method_v2*::link
+	struct wl_list input_methods; // struct wlr_input_method_v2.link
 
 	struct wl_listener display_destroy;
 
 	struct {
-		struct wl_signal input_method; // (struct wlr_input_method_v2*)
-		struct wl_signal destroy; // (struct wlr_input_method_manager_v2*)
+		struct wl_signal input_method; // struct wlr_input_method_v2
+		struct wl_signal destroy; // struct wlr_input_method_manager_v2
 	} events;
 };
 
@@ -99,6 +116,18 @@ void wlr_input_method_v2_send_text_change_cause(
 void wlr_input_method_v2_send_done(struct wlr_input_method_v2 *input_method);
 void wlr_input_method_v2_send_unavailable(
 	struct wlr_input_method_v2 *input_method);
+
+/**
+ * Get a struct wlr_input_popup_surface_v2 from a struct wlr_surface.
+ *
+ * Returns NULL if the surface has a different role or if the input popup
+ * surface has been destroyed.
+ */
+struct wlr_input_popup_surface_v2 *wlr_input_popup_surface_v2_try_from_wlr_surface(
+	struct wlr_surface *surface);
+
+void wlr_input_popup_surface_v2_send_text_input_rectangle(
+    struct wlr_input_popup_surface_v2 *popup_surface, struct wlr_box *sbox);
 
 void wlr_input_method_keyboard_grab_v2_send_key(
 	struct wlr_input_method_keyboard_grab_v2 *keyboard_grab,

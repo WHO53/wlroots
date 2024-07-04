@@ -15,7 +15,7 @@
 
 struct wlr_export_dmabuf_manager_v1 {
 	struct wl_global *global;
-	struct wl_list frames; // wlr_export_dmabuf_frame_v1::link
+	struct wl_list frames; // wlr_export_dmabuf_frame_v1.link
 
 	struct wl_listener display_destroy;
 
@@ -27,13 +27,14 @@ struct wlr_export_dmabuf_manager_v1 {
 struct wlr_export_dmabuf_frame_v1 {
 	struct wl_resource *resource;
 	struct wlr_export_dmabuf_manager_v1 *manager;
-	struct wl_list link; // wlr_export_dmabuf_manager_v1::frames
+	struct wl_list link; // wlr_export_dmabuf_manager_v1.frames
 
 	struct wlr_output *output;
 
 	bool cursor_locked;
 
 	struct wl_listener output_commit;
+	struct wl_listener output_destroy;
 };
 
 struct wlr_export_dmabuf_manager_v1 *wlr_export_dmabuf_manager_v1_create(

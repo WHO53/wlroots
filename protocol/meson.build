@@ -1,20 +1,35 @@
-wl_protocol_dir = wayland_protos.get_variable(pkgconfig: 'pkgdatadir')
+wayland_protos = dependency('wayland-protocols',
+	version: '>=1.32',
+	fallback: 'wayland-protocols',
+	default_options: ['tests=false'],
+)
+wl_protocol_dir = wayland_protos.get_variable('pkgdatadir')
 
-wayland_scanner_dep = dependency('wayland-scanner', required: false, native: true)
-if wayland_scanner_dep.found()
-	wayland_scanner = find_program(
-		wayland_scanner_dep.get_variable(pkgconfig: 'wayland_scanner'),
-		native: true,
-	)
-else
-	wayland_scanner = find_program('wayland-scanner', native: true)
-endif
+wayland_scanner_dep = dependency('wayland-scanner', native: true)
+wayland_scanner = find_program(
+	wayland_scanner_dep.get_variable('wayland_scanner'),
+	native: true,
+)
 
 protocols = {
 	# Stable upstream protocols
-	'xdg-shell': wl_protocol_dir / 'stable/xdg-shell/xdg-shell.xml',
 	'presentation-time': wl_protocol_dir / 'stable/presentation-time/presentation-time.xml',
 	'viewporter': wl_protocol_dir / 'stable/viewporter/viewporter.xml',
+	'xdg-shell': wl_protocol_dir / 'stable/xdg-shell/xdg-shell.xml',
+
+	# Staging upstream protocols
+	'content-type-v1': wl_protocol_dir / 'staging/content-type/content-type-v1.xml',
+	'cursor-shape-v1': wl_protocol_dir / 'staging/cursor-shape/cursor-shape-v1.xml',
+	'drm-lease-v1': wl_protocol_dir / 'staging/drm-lease/drm-lease-v1.xml',
+	'ext-idle-notify-v1': wl_protocol_dir / 'staging/ext-idle-notify/ext-idle-notify-v1.xml',
+	'ext-session-lock-v1': wl_protocol_dir / 'staging/ext-session-lock/ext-session-lock-v1.xml',
+	'fractional-scale-v1': wl_protocol_dir / 'staging/fractional-scale/fractional-scale-v1.xml',
+	'security-context-v1': wl_protocol_dir / 'staging/security-context/security-context-v1.xml',
+	'single-pixel-buffer-v1': wl_protocol_dir / 'staging/single-pixel-buffer/single-pixel-buffer-v1.xml',
+	'xdg-activation-v1': wl_protocol_dir / 'staging/xdg-activation/xdg-activation-v1.xml',
+	'xwayland-shell-v1': wl_protocol_dir / 'staging/xwayland-shell/xwayland-shell-v1.xml',
+	'tearing-control-v1': wl_protocol_dir / 'staging/tearing-control/tearing-control-v1.xml',
+
 	# Unstable upstream protocols
 	'fullscreen-shell-unstable-v1': wl_protocol_dir / 'unstable/fullscreen-shell/fullscreen-shell-unstable-v1.xml',
 	'idle-inhibit-unstable-v1': wl_protocol_dir / 'unstable/idle-inhibit/idle-inhibit-unstable-v1.xml',
@@ -26,16 +41,15 @@ protocols = {
 	'relative-pointer-unstable-v1': wl_protocol_dir / 'unstable/relative-pointer/relative-pointer-unstable-v1.xml',
 	'tablet-unstable-v2': wl_protocol_dir / 'unstable/tablet/tablet-unstable-v2.xml',
 	'text-input-unstable-v3': wl_protocol_dir / 'unstable/text-input/text-input-unstable-v3.xml',
-	'xdg-activation-v1': wl_protocol_dir / 'staging/xdg-activation/xdg-activation-v1.xml',
 	'xdg-decoration-unstable-v1': wl_protocol_dir / 'unstable/xdg-decoration/xdg-decoration-unstable-v1.xml',
 	'xdg-foreign-unstable-v1': wl_protocol_dir / 'unstable/xdg-foreign/xdg-foreign-unstable-v1.xml',
 	'xdg-foreign-unstable-v2': wl_protocol_dir / 'unstable/xdg-foreign/xdg-foreign-unstable-v2.xml',
 	'xdg-output-unstable-v1': wl_protocol_dir / 'unstable/xdg-output/xdg-output-unstable-v1.xml',
+
 	# Other protocols
-	'gtk-primary-selection': 'gtk-primary-selection.xml',
-	'kde-idle': 'idle.xml',
-	'kde-server-decoration': 'server-decoration.xml',
+	'drm': 'drm.xml',
 	'input-method-unstable-v2': 'input-method-unstable-v2.xml',
+	'kde-server-decoration': 'server-decoration.xml',
 	'virtual-keyboard-unstable-v1': 'virtual-keyboard-unstable-v1.xml',
 	'wlr-data-control-unstable-v1': 'wlr-data-control-unstable-v1.xml',
 	'wlr-export-dmabuf-unstable-v1': 'wlr-export-dmabuf-unstable-v1.xml',

@@ -9,20 +9,8 @@
 #ifndef WLR_RENDER_INTERFACE_H
 #define WLR_RENDER_INTERFACE_H
 
-#ifndef MESA_EGL_NO_X11_HEADERS
-#define MESA_EGL_NO_X11_HEADERS
-#endif
-#ifndef EGL_NO_X11
-#define EGL_NO_X11
-#endif
-#ifndef EGL_NO_PLATFORM_SPECIFIC_TYPES
-#define EGL_NO_PLATFORM_SPECIFIC_TYPES
-#endif
-
-#include <EGL/egl.h>
-#include <EGL/eglext.h>
 #include <stdbool.h>
-#include <wayland-server-protocol.h>
+#include <wayland-server-core.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/render/wlr_texture.h>
 #include <wlr/types/wlr_output.h>
@@ -32,7 +20,9 @@ struct wlr_box;
 struct wlr_fbox;
 
 struct wlr_renderer_impl {
-	void (*begin)(struct wlr_renderer *renderer, uint32_t width,
+	bool (*bind_buffer)(struct wlr_renderer *renderer,
+		struct wlr_buffer *buffer);
+	bool (*begin)(struct wlr_renderer *renderer, uint32_t width,
 		uint32_t height);
 	void (*end)(struct wlr_renderer *renderer);
 	void (*clear)(struct wlr_renderer *renderer, const float color[static 4]);
@@ -42,53 +32,70 @@ struct wlr_renderer_impl {
 		const float matrix[static 9], float alpha);
 	void (*render_quad_with_matrix)(struct wlr_renderer *renderer,
 		const float color[static 4], const float matrix[static 9]);
-	void (*render_ellipse_with_matrix)(struct wlr_renderer *renderer,
-		const float color[static 4], const float matrix[static 9]);
-	const enum wl_shm_format *(*formats)(
+	const uint32_t *(*get_shm_texture_formats)(
 		struct wlr_renderer *renderer, size_t *len);
-	bool (*format_supported)(struct wlr_renderer *renderer,
-		enum wl_shm_format fmt);
-	bool (*resource_is_wl_drm_buffer)(struct wlr_renderer *renderer,
-		struct wl_resource *resource);
-	void (*wl_drm_buffer_get_size)(struct wlr_renderer *renderer,
-		struct wl_resource *buffer, int *width, int *height);
-	const struct wlr_drm_format_set *(*get_dmabuf_formats)(
+	const struct wlr_drm_format_set *(*get_dmabuf_texture_formats)(
 		struct wlr_renderer *renderer);
-	enum wl_shm_format (*preferred_read_format)(struct wlr_renderer *renderer);
-	bool (*read_pixels)(struct wlr_renderer *renderer, enum wl_shm_format fmt,
-		uint32_t *flags, uint32_t stride, uint32_t width, uint32_t height,
+	const struct wlr_drm_format_set *(*get_render_formats)(
+		struct wlr_renderer *renderer);
+	uint32_t (*preferred_read_format)(struct wlr_renderer *renderer);
+	bool (*read_pixels)(struct wlr_renderer *renderer, uint32_t fmt,
+		uint32_t stride, uint32_t width, uint32_t height,
 		uint32_t src_x, uint32_t src_y, uint32_t dst_x, uint32_t dst_y,
 		void *data);
-	struct wlr_texture *(*texture_from_pixels)(struct wlr_renderer *renderer,
-		enum wl_shm_format fmt, uint32_t stride, uint32_t width,
-		uint32_t height, const void *data);
-	struct wlr_texture *(*texture_from_wl_drm)(struct wlr_renderer *renderer,
-		struct wl_resource *data);
-	struct wlr_texture *(*texture_from_dmabuf)(struct wlr_renderer *renderer,
-		struct wlr_dmabuf_attributes *attribs);
 	void (*destroy)(struct wlr_renderer *renderer);
-	bool (*init_wl_display)(struct wlr_renderer *renderer,
-		struct wl_display *wl_display);
-	bool (*blit_dmabuf)(struct wlr_renderer *renderer,
-		struct wlr_dmabuf_attributes *dst,
-		struct wlr_dmabuf_attributes *src);
+	int (*get_drm_fd)(struct wlr_renderer *renderer);
+	uint32_t (*get_render_buffer_caps)(struct wlr_renderer *renderer);
+	struct wlr_texture *(*texture_from_buffer)(struct wlr_renderer *renderer,
+		struct wlr_buffer *buffer);
+	struct wlr_render_pass *(*begin_buffer_pass)(struct wlr_renderer *renderer,
+		struct wlr_buffer *buffer, const struct wlr_buffer_pass_options *options);
+	struct wlr_render_timer *(*render_timer_create)(struct wlr_renderer *renderer);
 };
 
 void wlr_renderer_init(struct wlr_renderer *renderer,
 	const struct wlr_renderer_impl *impl);
 
 struct wlr_texture_impl {
-	bool (*is_opaque)(struct wlr_texture *texture);
-	bool (*write_pixels)(struct wlr_texture *texture,
-		uint32_t stride, uint32_t width, uint32_t height,
-		uint32_t src_x, uint32_t src_y, uint32_t dst_x, uint32_t dst_y,
-		const void *data);
-	bool (*to_dmabuf)(struct wlr_texture *texture,
-		struct wlr_dmabuf_attributes *attribs);
+	bool (*update_from_buffer)(struct wlr_texture *texture,
+		struct wlr_buffer *buffer, const pixman_region32_t *damage);
 	void (*destroy)(struct wlr_texture *texture);
 };
 
-void wlr_texture_init(struct wlr_texture *texture,
+void wlr_texture_init(struct wlr_texture *texture, struct wlr_renderer *rendener,
 	const struct wlr_texture_impl *impl, uint32_t width, uint32_t height);
+
+struct wlr_render_pass {
+	const struct wlr_render_pass_impl *impl;
+};
+
+void wlr_render_pass_init(struct wlr_render_pass *pass,
+	const struct wlr_render_pass_impl *impl);
+
+struct wlr_render_pass_impl {
+	bool (*submit)(struct wlr_render_pass *pass);
+	void (*add_texture)(struct wlr_render_pass *pass,
+		const struct wlr_render_texture_options *options);
+	/* Implementers are also guaranteed that options->box is nonempty */
+	void (*add_rect)(struct wlr_render_pass *pass,
+		const struct wlr_render_rect_options *options);
+};
+
+struct wlr_render_timer {
+	const struct wlr_render_timer_impl *impl;
+};
+
+struct wlr_render_timer_impl {
+	int (*get_duration_ns)(struct wlr_render_timer *timer);
+	void (*destroy)(struct wlr_render_timer *timer);
+};
+
+void wlr_render_texture_options_get_src_box(const struct wlr_render_texture_options *options,
+	struct wlr_fbox *box);
+void wlr_render_texture_options_get_dst_box(const struct wlr_render_texture_options *options,
+	struct wlr_box *box);
+float wlr_render_texture_options_get_alpha(const struct wlr_render_texture_options *options);
+void wlr_render_rect_options_get_box(const struct wlr_render_rect_options *options,
+	const struct wlr_buffer *buffer, struct wlr_box *box);
 
 #endif

@@ -14,30 +14,35 @@
 #include <wlr/types/wlr_output.h>
 
 /**
- * A backend implementation of wlr_output.
+ * Output state fields that don't require backend support. Backends can ignore
+ * them without breaking the API contract.
+ */
+#define WLR_OUTPUT_STATE_BACKEND_OPTIONAL \
+	(WLR_OUTPUT_STATE_DAMAGE | \
+	WLR_OUTPUT_STATE_SCALE | \
+	WLR_OUTPUT_STATE_TRANSFORM | \
+	WLR_OUTPUT_STATE_RENDER_FORMAT | \
+	WLR_OUTPUT_STATE_SUBPIXEL | \
+	WLR_OUTPUT_STATE_LAYERS)
+
+/**
+ * A backend implementation of struct wlr_output.
  *
- * The functions commit, attach_render and rollback_render are mandatory. Other
- * functions are optional.
+ * The commit function is mandatory. Other functions are optional.
  */
 struct wlr_output_impl {
 	/**
 	 * Set the output cursor plane image.
 	 *
-	 * The parameters describe the image texture, its scale and its transform.
-	 * If the scale and transform doesn't match the output's, the backend is
-	 * responsible for scaling and transforming the texture appropriately.
-	 * If texture is NULL, the cursor should be hidden.
+	 * If buffer is NULL, the cursor should be hidden.
 	 *
 	 * The hotspot indicates the offset that needs to be applied to the
 	 * top-left corner of the image to match the cursor position. In other
 	 * words, the image should be displayed at (x - hotspot_x, y - hotspot_y).
-	 *
-	 * If update_texture is true, all parameters need to be taken into account.
-	 * If update_texture is false, only the hotspot is to be updated.
+	 * The hotspot is given in the buffer's coordinate space.
 	 */
-	bool (*set_cursor)(struct wlr_output *output, struct wlr_texture *texture,
-		float scale, enum wl_output_transform transform,
-		int32_t hotspot_x, int32_t hotspot_y, bool update_texture);
+	bool (*set_cursor)(struct wlr_output *output, struct wlr_buffer *buffer,
+		int hotspot_x, int hotspot_y);
 	/**
 	 * Set the output cursor plane position.
 	 *
@@ -49,39 +54,18 @@ struct wlr_output_impl {
 	 */
 	void (*destroy)(struct wlr_output *output);
 	/**
-	 * Make the output's back-buffer current for the renderer.
-	 *
-	 * buffer_age must be set to the buffer age in number of frames, or -1 if
-	 * unknown.
-	 */
-	bool (*attach_render)(struct wlr_output *output, int *buffer_age);
-	/**
-	 * HACK: allows to work on the damaged area after the buffer has
-	 * been made current.
-	 *
-	 * This is especially useful when using the EGL_KHR_partial_update
-	 * extension.
-	 */
-	bool (*handle_damage)(struct wlr_output *output, pixman_region32_t *damage);
-	/**
-	 * Unset the current renderer's buffer.
-	 *
-	 * This is the opposite of attach_render.
-	 */
-	void (*rollback_render)(struct wlr_output *output);
-	/**
-	 * Check that the pending output state is a valid configuration.
+	 * Check that the supplied output state is a valid configuration.
 	 *
 	 * If this function returns true, commit can only fail due to a runtime
 	 * error.
 	 */
-	bool (*test)(struct wlr_output *output);
+	bool (*test)(struct wlr_output *output, const struct wlr_output_state *state);
 	/**
-	 * Commit the pending output state.
+	 * Commit the supplied output state.
 	 *
 	 * If a buffer has been attached, a frame event is scheduled.
 	 */
-	bool (*commit)(struct wlr_output *output);
+	bool (*commit)(struct wlr_output *output, const struct wlr_output_state *state);
 	/**
 	 * Get the maximum number of gamma LUT elements for each channel.
 	 *
@@ -89,49 +73,41 @@ struct wlr_output_impl {
 	 */
 	size_t (*get_gamma_size)(struct wlr_output *output);
 	/**
-	 * Export the output's current back-buffer as a DMA-BUF.
+	 * Get the list of formats suitable for the cursor, assuming a buffer with
+	 * the specified capabilities.
+	 *
+	 * If unimplemented, the cursor buffer has no format constraint. If NULL is
+	 * returned, no format is suitable.
 	 */
-	bool (*export_dmabuf)(struct wlr_output *output,
-		struct wlr_dmabuf_attributes *attribs);
+	const struct wlr_drm_format_set *(*get_cursor_formats)(
+		struct wlr_output *output, uint32_t buffer_caps);
+	/**
+	 * Get the size suitable for the cursor buffer. Attempts to use a different
+	 * size for the cursor may fail.
+	 */
+	void (*get_cursor_size)(struct wlr_output *output, int *width, int *height);
+	/**
+	 * Get the list of DRM formats suitable for the primary buffer,
+	 * assuming a buffer with the specified capabilities.
+	 *
+	 * If unimplemented, the primary buffer has no format constraint. If NULL
+	 * is returned, no format is suitable.
+	 */
+	const struct wlr_drm_format_set *(*get_primary_formats)(
+		struct wlr_output *output, uint32_t buffer_caps);
 };
 
 /**
  * Initialize a new output.
  */
 void wlr_output_init(struct wlr_output *output, struct wlr_backend *backend,
-	const struct wlr_output_impl *impl, struct wl_display *display);
-/**
- * Update the current output mode.
- *
- * The backend must call this function when the mode is updated to notify
- * compositors about the change.
- */
-void wlr_output_update_mode(struct wlr_output *output,
-	struct wlr_output_mode *mode);
-/**
- * Update the current output custom mode.
- *
- * The backend must call this function when the mode is updated to notify
- * compositors about the change.
- */
-void wlr_output_update_custom_mode(struct wlr_output *output, int32_t width,
-	int32_t height, int32_t refresh);
-/**
- * Update the current output status.
- *
- * The backend must call this function when the status is updated to notify
- * compositors about the change.
- */
-void wlr_output_update_enabled(struct wlr_output *output, bool enabled);
+	const struct wlr_output_impl *impl, struct wl_display *display,
+	const struct wlr_output_state *state);
 /**
  * Notify compositors that they need to submit a new frame in order to apply
  * output changes.
  */
 void wlr_output_update_needs_frame(struct wlr_output *output);
-/**
- * Notify compositors that the output needs to be fully repainted.
- */
-void wlr_output_damage_whole(struct wlr_output *output);
 /**
  * Send a frame event.
  *
@@ -145,5 +121,10 @@ void wlr_output_send_frame(struct wlr_output *output);
  */
 void wlr_output_send_present(struct wlr_output *output,
 	struct wlr_output_event_present *event);
+/**
+ * Request the compositor to apply new state.
+ */
+void wlr_output_send_request_state(struct wlr_output *output,
+	const struct wlr_output_state *state);
 
 #endif

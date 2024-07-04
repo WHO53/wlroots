@@ -4,11 +4,11 @@
 #include <strings.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
+#include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/util/log.h>
 #include "types/wlr_data_device.h"
-#include "util/signal.h"
 
 #define DATA_DEVICE_MANAGER_VERSION 3
 
@@ -65,7 +65,7 @@ static void data_device_start_drag(struct wl_client *client,
 	struct wlr_surface *icon = NULL;
 	if (icon_resource) {
 		icon = wlr_surface_from_resource(icon_resource);
-		if (!wlr_surface_set_role(icon, &drag_icon_surface_role, NULL,
+		if (!wlr_surface_set_role(icon, &drag_icon_surface_role,
 				icon_resource, WL_DATA_DEVICE_ERROR_ROLE)) {
 			return;
 		}
@@ -99,8 +99,8 @@ static const struct wl_data_device_interface data_device_impl = {
 
 static void data_device_handle_resource_destroy(struct wl_resource *resource) {
 	wl_list_remove(wl_resource_get_link(resource));
+	wl_list_init(wl_resource_get_link(resource));
 }
-
 
 static void device_resource_send_selection(struct wl_resource *device_resource) {
 	struct wlr_seat_client *seat_client =
@@ -161,7 +161,7 @@ void wlr_seat_request_set_selection(struct wlr_seat *seat,
 		.source = source,
 		.serial = serial,
 	};
-	wlr_signal_emit_safe(&seat->events.request_set_selection, &event);
+	wl_signal_emit_mutable(&seat->events.request_set_selection, &event);
 }
 
 static void seat_handle_selection_source_destroy(
@@ -178,7 +178,7 @@ static void seat_handle_selection_source_destroy(
 		seat_client_send_selection(focused_client);
 	}
 
-	wlr_signal_emit_safe(&seat->events.set_selection, seat);
+	wl_signal_emit_mutable(&seat->events.set_selection, seat);
 }
 
 void wlr_seat_set_selection(struct wlr_seat *seat,
@@ -210,7 +210,7 @@ void wlr_seat_set_selection(struct wlr_seat *seat,
 		seat_client_send_selection(focused_client);
 	}
 
-	wlr_signal_emit_safe(&seat->events.set_selection, seat);
+	wl_signal_emit_mutable(&seat->events.set_selection, seat);
 }
 
 
@@ -238,6 +238,10 @@ static void data_device_manager_get_data_device(struct wl_client *client,
 	}
 	wl_resource_set_implementation(resource, &data_device_impl, seat_client,
 		data_device_handle_resource_destroy);
+	if (seat_client == NULL) {
+		wl_list_init(wl_resource_get_link(resource));
+		return;
+	}
 	wl_list_insert(&seat_client->data_devices, wl_resource_get_link(resource));
 
 	struct wlr_seat_client *focused_client =
@@ -279,7 +283,7 @@ static void data_device_manager_bind(struct wl_client *client,
 static void handle_display_destroy(struct wl_listener *listener, void *data) {
 	struct wlr_data_device_manager *manager =
 		wl_container_of(listener, manager, display_destroy);
-	wlr_signal_emit_safe(&manager->events.destroy, manager);
+	wl_signal_emit_mutable(&manager->events.destroy, manager);
 	wl_list_remove(&manager->display_destroy.link);
 	wl_global_destroy(manager->global);
 	free(manager);
@@ -287,8 +291,7 @@ static void handle_display_destroy(struct wl_listener *listener, void *data) {
 
 struct wlr_data_device_manager *wlr_data_device_manager_create(
 		struct wl_display *display) {
-	struct wlr_data_device_manager *manager =
-		calloc(1, sizeof(struct wlr_data_device_manager));
+	struct wlr_data_device_manager *manager = calloc(1, sizeof(*manager));
 	if (manager == NULL) {
 		wlr_log(WLR_ERROR, "could not create data device manager");
 		return NULL;

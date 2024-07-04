@@ -10,19 +10,21 @@
 #define WLR_TYPES_WLR_CURSOR_H
 
 #include <wayland-server-core.h>
-#include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_output.h>
+
+struct wlr_input_device;
+struct wlr_xcursor_manager;
 
 /**
  * wlr_cursor implements the behavior of the "cursor", that is, the image on the
  * screen typically moved about with a mouse or so. It provides tracking for
- * this in global coordinates, and integrates with wlr_output,
- * wlr_output_layout, and wlr_input_device. You can use it to abstract multiple
- * input devices over a single cursor, constrain cursor movement to the usable
- * area of a wlr_output_layout and communicate position updates to the hardware
- * cursor, constrain specific input devices to specific outputs or regions of
- * the screen, and so on.
+ * this in global coordinates, and integrates with struct wlr_output,
+ * struct wlr_output_layout, and struct wlr_input_device. You can use it to
+ * abstract multiple input devices over a single cursor, constrain cursor
+ * movement to the usable area of a struct wlr_output_layout and communicate
+ * position updates to the hardware cursor, constrain specific input devices to
+ * specific outputs or regions of the screen, and so on.
  */
 
 struct wlr_box;
@@ -36,15 +38,15 @@ struct wlr_cursor {
 	 * The interpretation of these signals is the responsibility of the
 	 * compositor, but some helpers are provided for your benefit. If you
 	 * receive a relative motion event, for example, you may want to call
-	 * wlr_cursor_move. If you receive an absolute event, call
-	 * wlr_cursor_warp_absolute. If you pass an input device into these
+	 * wlr_cursor_move(). If you receive an absolute event, call
+	 * wlr_cursor_warp_absolute(). If you pass an input device into these
 	 * functions, it will apply the region/output constraints associated with
 	 * that device to the resulting cursor motion. If an output layout is
 	 * attached, these functions will constrain the resulting cursor motion to
 	 * within the usable space of the output layout.
 	 *
-	 * Re-broadcasting these signals to, for example, a wlr_seat, is also your
-	 * responsibility.
+	 * Re-broadcasting these signals to, for example, a struct wlr_seat, is also
+	 * your responsibility.
 	 */
 	struct {
 		struct wl_signal motion;
@@ -58,6 +60,8 @@ struct wlr_cursor {
 		struct wl_signal pinch_begin;
 		struct wl_signal pinch_update;
 		struct wl_signal pinch_end;
+		struct wl_signal hold_begin;
+		struct wl_signal hold_end;
 
 		struct wl_signal touch_up;
 		struct wl_signal touch_down;
@@ -133,15 +137,26 @@ void wlr_cursor_move(struct wlr_cursor *cur, struct wlr_input_device *dev,
 	double delta_x, double delta_y);
 
 /**
- * Set the cursor image. stride is given in bytes. If pixels is NULL, hides the
- * cursor.
+ * Set the cursor buffer.
  *
- * If scale isn't zero, the image is only set on outputs having the provided
- * scale.
+ * The buffer is used on all outputs and is scaled accordingly. The hotspot is
+ * expressed in logical coordinates. A NULL buffer hides the cursor.
  */
-void wlr_cursor_set_image(struct wlr_cursor *cur, const uint8_t *pixels,
-	int32_t stride, uint32_t width, uint32_t height, int32_t hotspot_x,
-	int32_t hotspot_y, float scale);
+void wlr_cursor_set_buffer(struct wlr_cursor *cur, struct wlr_buffer *buffer,
+	int32_t hotspot_x, int32_t hotspot_y, float scale);
+
+/**
+ * Hide the cursor image.
+ */
+void wlr_cursor_unset_image(struct wlr_cursor *cur);
+
+/**
+ * Set the cursor image from an XCursor theme.
+ *
+ * The image will be loaded from the struct wlr_xcursor_manager.
+ */
+void wlr_cursor_set_xcursor(struct wlr_cursor *cur,
+	struct wlr_xcursor_manager *manager, const char *name);
 
 /**
  * Set the cursor surface. The surface can be committed to update the cursor
@@ -188,15 +203,16 @@ void wlr_cursor_map_input_to_output(struct wlr_cursor *cur,
 	struct wlr_input_device *dev, struct wlr_output *output);
 
 /**
- * Maps this cursor to an arbitrary region on the associated wlr_output_layout.
+ * Maps this cursor to an arbitrary region on the associated
+ * struct wlr_output_layout.
  */
-void wlr_cursor_map_to_region(struct wlr_cursor *cur, struct wlr_box *box);
+void wlr_cursor_map_to_region(struct wlr_cursor *cur, const struct wlr_box *box);
 
 /**
  * Maps inputs from this input device to an arbitrary region on the associated
- * wlr_output_layout.
+ * struct wlr_output_layout.
  */
 void wlr_cursor_map_input_to_region(struct wlr_cursor *cur,
-	struct wlr_input_device *dev, struct wlr_box *box);
+	struct wlr_input_device *dev, const struct wlr_box *box);
 
 #endif
