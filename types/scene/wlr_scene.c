@@ -1125,16 +1125,19 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		return;
 	}
 
+	int x = entry->x - data->logical.x;
+	int y = entry->y - data->logical.y;
+
 	struct wlr_box dst_box = {
-		.x = entry->x - data->logical.x,
-		.y = entry->y - data->logical.y,
+		.x = x,
+		.y = y,
 	};
 	scene_node_get_size(node, &dst_box.width, &dst_box.height);
 	scale_box(&dst_box, data->scale);
 
 	pixman_region32_t opaque;
 	pixman_region32_init(&opaque);
-	scene_node_opaque_region(node, dst_box.x, dst_box.y, &opaque);
+	scene_node_opaque_region(node, x, y, &opaque);
 	scale_output_damage(&opaque, data->scale);
 	pixman_region32_subtract(&opaque, &render_region, &opaque);
 
@@ -1280,6 +1283,11 @@ static void scene_output_handle_commit(struct wl_listener *listener, void *data)
 	if (force_update || state->committed & (WLR_OUTPUT_STATE_MODE |
 			WLR_OUTPUT_STATE_ENABLED)) {
 		scene_output_update_geometry(scene_output, force_update);
+	}
+
+	if (scene_output->scene->debug_damage_option == WLR_SCENE_DEBUG_DAMAGE_HIGHLIGHT &&
+			!wl_list_empty(&scene_output->damage_highlight_regions)) {
+		wlr_output_schedule_frame(scene_output->output);
 	}
 }
 
@@ -1897,11 +1905,6 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 	wlr_output_state_set_buffer(state, buffer);
 	wlr_buffer_unlock(buffer);
 	output_state_apply_damage(&render_data, state);
-
-	if (debug_damage == WLR_SCENE_DEBUG_DAMAGE_HIGHLIGHT &&
-			!wl_list_empty(&scene_output->damage_highlight_regions)) {
-		wlr_output_schedule_frame(scene_output->output);
-	}
 
 	return true;
 }

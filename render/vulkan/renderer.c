@@ -67,6 +67,10 @@ static float color_to_linear(float non_linear) {
 		non_linear / 12.92;
 }
 
+static float color_to_linear_premult(float non_linear, float alpha) {
+	return (alpha == 0) ? 0 : color_to_linear(non_linear / alpha) * alpha;
+}
+
 static void mat3_to_mat4(const float mat3[9], float mat4[4][4]) {
 	memset(mat4, 0, sizeof(float) * 16);
 	mat4[0][0] = mat3[0];
@@ -186,6 +190,8 @@ static void destroy_render_format_setup(struct wlr_vk_renderer *renderer,
 		vkDestroyPipeline(dev, pipeline->vk, NULL);
 		free(pipeline);
 	}
+
+	free(setup);
 }
 
 static void shared_buffer_destroy(struct wlr_vk_renderer *r,
@@ -1475,9 +1481,9 @@ static void vulkan_clear(struct wlr_renderer *wlr_renderer,
 		// But in other parts of wlroots we just always assume
 		// srgb so that's why we have to convert here.
 		.clearValue.color.float32 = {
-			color_to_linear(color[0]),
-			color_to_linear(color[1]),
-			color_to_linear(color[2]),
+			color_to_linear_premult(color[0], color[3]),
+			color_to_linear_premult(color[1], color[3]),
+			color_to_linear_premult(color[2], color[3]),
 			color[3], // no conversion for alpha
 		},
 	};
@@ -1553,9 +1559,9 @@ static void vulkan_render_quad_with_matrix(struct wlr_renderer *wlr_renderer,
 	// But in other parts of wlroots we just always assume
 	// srgb so that's why we have to convert here.
 	float linear_color[4];
-	linear_color[0] = color_to_linear(color[0]);
-	linear_color[1] = color_to_linear(color[1]);
-	linear_color[2] = color_to_linear(color[2]);
+	linear_color[0] = color_to_linear_premult(color[0], color[3]);
+	linear_color[1] = color_to_linear_premult(color[1], color[3]);
+	linear_color[2] = color_to_linear_premult(color[2], color[3]);
 	linear_color[3] = color[3]; // no conversion for alpha
 
 	vkCmdPushConstants(cb, pipe->layout->vk,
@@ -1661,6 +1667,7 @@ static void vulkan_destroy(struct wlr_renderer *wlr_renderer) {
 		vkDestroyDescriptorSetLayout(dev->dev, pipeline_layout->ds, NULL);
 		vkDestroySampler(dev->dev, pipeline_layout->sampler, NULL);
 		vkDestroySamplerYcbcrConversion(dev->dev, pipeline_layout->ycbcr.conversion, NULL);
+		free(pipeline_layout);
 	}
 
 	vkDestroySemaphore(dev->dev, renderer->timeline_semaphore, NULL);
