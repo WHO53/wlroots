@@ -2,38 +2,51 @@ Source: wlroots
 Priority: optional
 Maintainer: Sway and related packages team <team+swaywm@tracker.debian.org>
 Uploaders: Guido Günther <agx@sigxcpu.org>, Birger Schacht <birger@rantanplan.org>
-Build-Depends:
+Build-Depends: dpkg-dev (>= 1.22.5),
  debhelper-compat (= 13),
- libavformat-dev,
- libavcodec-dev,
+ glslang-tools,
+ hwdata,
  libcap-dev,
- libdrm-dev (>= 2.4.95),
+ libcairo2-dev,
+ libdisplay-info-dev (>= 0.1.1),
+ libdrm-dev (>= 2.4.114),
  libegl1-mesa-dev,
- libgbm-dev (>= 17.1.0),
+ libegl-dev,
+ libgbm-dev,
  libgles2-mesa-dev,
- libinput-dev (>= 1.9.0),
+ libinput-dev,
+ libliftoff-dev (>= 0.4.1),
  libpixman-1-dev,
  libpng-dev,
+ libseat-dev,
  libsystemd-dev,
- libwayland-dev (>= 1.16),
+ libvulkan-dev,
+ libwayland-dev (>= 1.22),
+ libx11-xcb-dev,
  libxcb1-dev,
  libxcb-composite0-dev,
+ libxcb-dri3-dev,
+ libxcb-ewmh-dev,
  libxcb-icccm4-dev,
  libxcb-image0-dev,
+ libxcb-present-dev,
  libxcb-render0-dev,
+ libxcb-render-util0-dev,
+ libxcb-res0-dev,
+ libxcb-shm0-dev,
  libxcb-xfixes0-dev,
  libxcb-xinput-dev,
- libx11-xcb-dev,
  libxkbcommon-dev,
- meson (>= 0.51.2),
- pkg-config,
- wayland-protocols (>= 1.17),
+ meson,
+ pkgconf,
+ wayland-protocols (>= 1.32),
+ xwayland,
  android-headers,
  libhybris-dev,
  libhardware-dev,
-Standards-Version: 4.5.1
+Standards-Version: 4.6.2
 Section: libs
-Homepage: https://github.com/swaywm/wlroots
+Homepage: https://gitlab.freedesktop.org/wlroots/wlroots/
 Vcs-Git: https://salsa.debian.org/swaywm-team/wlroots.git
 Vcs-Browser: https://salsa.debian.org/swaywm-team/wlroots
 Rules-Requires-Root: no
@@ -44,36 +57,50 @@ Architecture: any
 Multi-Arch: same
 Depends:
  ${misc:Depends},
- libwlroots7d (= ${binary:Version}),
+ libwlroots12t64 (= ${binary:Version}),
  libcap-dev,
- libdrm-dev,
- libegl1-mesa-dev,
- libgbm-dev (>= 17.1.0),
+ libdisplay-info-dev,
+ libdrm-dev (>= 2.4.114),
+ libegl-dev,
+ libgbm-dev,
  libgles2-mesa-dev,
- libinput-dev (>= 1.7.0),
+ libinput-dev,
  libpixman-1-dev,
+ libseat-dev,
  libsystemd-dev,
- libwayland-dev (>= 1.15),
+ libliftoff-dev (>= 0.4.0),
+ libudev-dev,
+ libvulkan-dev,
+ libwayland-dev (>= 1.22),
  libxcb1-dev,
  libxcb-composite0-dev,
+ libxcb-dri3-dev,
+ libxcb-ewmh-dev,
  libxcb-icccm4-dev,
  libxcb-image0-dev,
+ libxcb-present-dev,
  libxcb-render0-dev,
+ libxcb-render-util0-dev,
+ libxcb-res0-dev,
+ libxcb-shm0-dev,
  libxcb-xfixes0-dev,
  libxcb-xinput-dev,
  libxkbcommon-dev,
  libx11-xcb-dev,
- wayland-protocols (>= 1.15),
+ wayland-protocols (>= 1.24),
  android-headers,
  libhybris-dev,
  libhardware-dev,
 Description: Modular wayland compositor library - development headers
  wlroots is a set of pluggable, composable modules to build a Wayland
- composior.
+ compositor.
  .
  This package contains the development headers.
 
-Package: libwlroots7d
+Package: libwlroots12t64
+Provides: ${t64:Provides}
+Replaces: libwlroots12
+Breaks: libwlroots12 (<< ${source:Version})
 Architecture: any
 Multi-Arch: same
 Depends:
@@ -83,7 +110,7 @@ Description: Modular wayland compositor library - shared library
  wlroots is a set of pluggable, composable modules to build a Wayland
  composior.
  .
- This package contains the share library.
+ This package contains the shared library.
 
 Package: libwlroots-examples
 Architecture: any
@@ -94,5 +121,4 @@ Description: Modular wayland compositor library - binaries
  wlroots is a set of pluggable, composable modules to build a Wayland
  composior.
  .
- This package contains the reference compositor rootston and other
- examples.
+ This package contains various examples on how to use wlroots.

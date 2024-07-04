@@ -1,9 +1,10 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: wlroots
-Source: https://github.com/swaywm/wlroots
+Source: https://gitlab.freedesktop.org/wlroots/wlroots/
 
 Files: *
-Copyright: 2017-2019, Drew DeVault
+Copyright: 2023 The wlroots contributors
+  2017-2019, Drew DeVault
   2014, Jari Vetoniemi
 License: Expat
 
@@ -25,10 +26,6 @@ License: Expat
 
 Files: include/xcursor/xcursor.h
 Copyright: 2002, Keith Packard
-License: Expat
-
-Files: protocol/gtk-primary-selection.xml
-Copyright: 2015, 2016 Red Hat
 License: Expat
 
 Files: protocol/input-method-unstable-v2.xml
@@ -81,15 +78,6 @@ License: Expat
 
 Files: protocol/wlr-screencopy-unstable-v1.xml
 Copyright: 2018 Simon Ser
-License: Expat
-
-Files: examples/screencopy.c
-Copyright: 2008 Kristian Høgsberg
-License: Expat
-
-Files: examples/screencopy-dmabuf.c
-Copyright: 2008 Kristian Høgsberg
- 2020 Andri Yngvason
 License: Expat
 
 License: Expat
@@ -236,8 +224,7 @@ License: CC0-1.0
      party to this document and has no duty or obligation with respect to
      this CC0 or use of the Work.
 
-Files: protocol/idle.xml
- protocol/server-decoration.xml
+Files: protocol/server-decoration.xml
 Copyright: 2015 Martin Gräßlin
 License: LGPL-2.1+
  This program is free software: you can redistribute it and/or modify
