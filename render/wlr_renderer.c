@@ -231,7 +231,7 @@ bool wlr_renderer_init_wl_display(struct wlr_renderer *r,
 	}
 
 	if (wlr_renderer_is_android(r)) {
-		return android_init_wl_display(r, wl_display);
+		return wlr_android_renderer_init_wl_display(r, wl_display);
 	}
 
 	if (wlr_renderer_get_dmabuf_texture_formats(r) != NULL &&
