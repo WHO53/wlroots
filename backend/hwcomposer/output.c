@@ -257,8 +257,6 @@ struct wlr_output *wlr_hwcomposer_add_output(struct wlr_backend *wlr_backend,
 	output->should_destroy = false;
 	output->hwc_display_id = display;
 	output->hwc_is_primary = primary_display;
-	output->wlr_output.phys_width = output->hwc_phys_width;
-	output->wlr_output.phys_height = output->hwc_phys_height;
 	int32_t refresh = output->hwc_refresh ? (1000000000000LL / output->hwc_refresh) : 0;
 	if (refresh <= 0) {
 		refresh = HWCOMPOSER_DEFAULT_REFRESH;
@@ -274,6 +272,8 @@ struct wlr_output *wlr_hwcomposer_add_output(struct wlr_backend *wlr_backend,
 	wlr_log(WLR_INFO, "wlr_hwcomposer_add_output width=%d height=%d refresh=%d idle_time=%ld",
 			output->hwc_width, output->hwc_height, refresh, hwc_backend->idle_time);
 
+	output->wlr_output.phys_width = output->hwc_phys_width;
+	output->wlr_output.phys_height = output->hwc_phys_height;
 	wlr_output->make = malloc(64 * sizeof(char));
 	wlr_output->model = malloc(64 * sizeof(char));
 	wlr_output->name = malloc(64 * sizeof(char));
