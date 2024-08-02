@@ -19,6 +19,18 @@ struct wlr_android_renderer *android_get_renderer(
 	return renderer;
 }
 
+static struct wlr_gles2_renderer *android_get_gles2_renderer(struct wlr_renderer *wlr_renderer) {
+	assert(wlr_renderer_is_android(wlr_renderer));
+	struct wlr_android_renderer *renderer = wl_container_of(wlr_renderer, renderer, wlr_renderer);
+	return gles2_get_renderer(renderer->wlr_gles_renderer);
+}
+
+struct wlr_egl *wlr_android_renderer_get_egl(struct wlr_renderer *wlr_renderer) {
+	struct wlr_gles2_renderer *gles2_renderer = android_get_gles2_renderer(wlr_renderer);
+
+	return gles2_renderer->egl;
+}
+
 static void destroy_buffer(struct wlr_android_buffer *buffer) {
 	wl_list_remove(&buffer->link);
 	wlr_addon_finish(&buffer->addon);
