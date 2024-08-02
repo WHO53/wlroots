@@ -4,6 +4,7 @@
 #include "render/android.h"
 #include "render/egl.h"
 #include "render/gles2.h"
+#include "types/wlr_matrix.h"
 #include <drm_fourcc.h>
 
 static const struct wlr_renderer_impl renderer_impl;
@@ -119,8 +120,14 @@ static bool android_bind_buffer(struct wlr_renderer *wlr_renderer,
 static bool android_begin(struct wlr_renderer *wlr_renderer, uint32_t width,
 		uint32_t height) {
 	struct wlr_android_renderer *renderer = android_get_renderer(wlr_renderer);
+	bool ret = renderer->wlr_gles_renderer->impl->begin(renderer->wlr_gles_renderer, width, height);
 
-	return renderer->wlr_gles_renderer->impl->begin(renderer->wlr_gles_renderer, width, height);
+	if (ret) {
+		matrix_projection(android_get_gles2_renderer(wlr_renderer)->projection, width, height,
+			WL_OUTPUT_TRANSFORM_NORMAL);
+	}
+
+	return ret;
 }
 
 static void android_end(struct wlr_renderer *wlr_renderer) {
@@ -137,8 +144,16 @@ static void android_clear(struct wlr_renderer *wlr_renderer, const float color[s
 
 static void android_scissor(struct wlr_renderer *wlr_renderer, struct wlr_box *box) {
 	struct wlr_android_renderer *renderer = android_get_renderer(wlr_renderer);
+	struct wlr_gles2_renderer *gles2_renderer = android_get_gles2_renderer(wlr_renderer);
 
-	renderer->wlr_gles_renderer->impl->scissor(renderer->wlr_gles_renderer, box);
+	if (box != NULL) {
+		struct wlr_box gl_box;
+		wlr_box_transform(&gl_box, box, WL_OUTPUT_TRANSFORM_FLIPPED_180,
+			gles2_renderer->viewport_width, gles2_renderer->viewport_height);
+		renderer->wlr_gles_renderer->impl->scissor(renderer->wlr_gles_renderer, &gl_box);
+	} else {
+		renderer->wlr_gles_renderer->impl->scissor(renderer->wlr_gles_renderer, NULL);
+	}
 }
 
 static bool android_render_subtexture_with_matrix(struct wlr_renderer *wlr_renderer,
