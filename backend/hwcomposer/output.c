@@ -104,7 +104,7 @@ static bool output_commit(struct wlr_output *wlr_output,
 		}
 
 		// Start timer so that we can let hwc initialize
-		if (wlr_output->enabled && wl_event_source_timer_update(output->vsync_timer,
+		if (state->enabled && wl_event_source_timer_update(output->vsync_timer,
 			output->frame_delay) != 0) {
 			wlr_log(WLR_ERROR, "Unable to restart vsync timer");
 		}
