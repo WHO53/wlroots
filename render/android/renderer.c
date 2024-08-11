@@ -312,8 +312,15 @@ static uint32_t android_get_render_buffer_caps(struct wlr_renderer *wlr_renderer
 static struct wlr_texture *android_texture_from_buffer(struct wlr_renderer *wlr_renderer,
 		struct wlr_buffer *wlr_buffer) {
 	struct wlr_android_renderer *renderer = android_get_renderer(wlr_renderer);
+	struct wlr_texture *texture;
 
-	return renderer->wlr_gles_renderer->impl->texture_from_buffer(renderer->wlr_gles_renderer, wlr_buffer);
+	if (wlr_android_wlegl_buffer_is_instance(wlr_buffer)) {
+		texture = gles2_texture_from_wl_drm(wlr_renderer, ((struct wlr_android_wlegl_buffer *)wlr_buffer)->inner.resource);
+	} else {
+		texture = renderer->wlr_gles_renderer->impl->texture_from_buffer(renderer->wlr_gles_renderer, wlr_buffer);
+	}
+
+	return texture;
 }
 
 static struct wlr_render_timer *android_render_timer_create(struct wlr_renderer *wlr_renderer) {
