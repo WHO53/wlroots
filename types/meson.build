@@ -94,6 +94,15 @@ wlr_files += files(
 	'wlr_tearing_control_v1.c',
 )
 
+if features.get('android-renderer')
+	gralloc = dependency('libgralloc', required: true)
+	wlr_deps += [gralloc]
+
+	wlr_files += files(
+		'android_wlegl/wlr_android_wlegl.c',
+	)
+endif
+
 if features.get('drm-backend')
 	wlr_files += files(
 		'wlr_drm_lease_v1.c',
