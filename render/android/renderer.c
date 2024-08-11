@@ -33,6 +33,101 @@ struct wlr_egl *wlr_android_renderer_get_egl(struct wlr_renderer *wlr_renderer) 
 	return gles2_renderer->egl;
 }
 
+//
+// wl_drm compat
+// Reintroduced and reworked for 0.17.x from these reverted commits:
+// * render/egl: remove EGL_WL_bind_wayland_display support (8a4957570f2d546cad033371db0c2463459536ce)
+// * render/gles2: use wlr_drm for wl_drm implementation (4e07d4cbf9c104625d419b9123dca0ef402472e7)
+//
+static struct wlr_texture *gles2_texture_from_wl_drm(struct wlr_renderer *wlr_renderer,
+		struct wl_resource *resource) {
+	struct wlr_gles2_renderer *renderer = android_get_gles2_renderer(wlr_renderer);
+
+	if (!renderer->procs.glEGLImageTargetTexture2DOES) {
+		return NULL;
+	}
+
+	struct wlr_egl_context prev_ctx;
+	wlr_egl_save_context(&prev_ctx);
+	wlr_egl_make_current(renderer->egl);
+
+	EGLint fmt;
+	int width, height;
+
+	if (!renderer->egl->procs.eglQueryWaylandBufferWL(renderer->egl->display, resource,
+			EGL_TEXTURE_FORMAT, &fmt)) {
+		return NULL;
+	}
+
+	renderer->egl->procs.eglQueryWaylandBufferWL(renderer->egl->display, resource, EGL_WIDTH, &width);
+	renderer->egl->procs.eglQueryWaylandBufferWL(renderer->egl->display, resource, EGL_HEIGHT, &height);
+
+	const EGLint attribs[] = {
+		EGL_WAYLAND_PLANE_WL, 0,
+		EGL_NONE,
+	};
+	EGLImageKHR image = renderer->egl->procs.eglCreateImageKHR(renderer->egl->display, renderer->egl->context,
+		EGL_WAYLAND_BUFFER_WL, resource, attribs);
+
+
+	if (image == EGL_NO_IMAGE_KHR) {
+		wlr_log(WLR_ERROR, "Failed to create EGL image from wl_drm resource");
+		goto error_ctx;
+	}
+
+	struct wlr_gles2_texture *texture =
+		gles2_texture_create(renderer, width, height);
+	if (texture == NULL) {
+		goto error_image;
+	}
+
+	texture->drm_format = DRM_FORMAT_INVALID; // texture can't be written anyways
+	texture->image = image;
+
+	switch (fmt) {
+	case EGL_TEXTURE_RGB:
+		texture->has_alpha = false;
+		break;
+	case EGL_TEXTURE_RGBA:
+	case EGL_TEXTURE_EXTERNAL_WL:
+		texture->has_alpha = true;
+		break;
+	default:
+		wlr_log(WLR_ERROR, "Invalid or unsupported EGL buffer format");
+		goto error_texture;
+	}
+
+	texture->target = GL_TEXTURE_EXTERNAL_OES;
+
+	push_gles2_debug(renderer);
+
+	glGenTextures(1, &texture->tex);
+	glBindTexture(GL_TEXTURE_EXTERNAL_OES, texture->tex);
+	glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	renderer->procs.glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES,
+		texture->image);
+	glBindTexture(GL_TEXTURE_EXTERNAL_OES, 0);
+
+	pop_gles2_debug(renderer);
+
+	wlr_egl_restore_context(&prev_ctx);
+
+	return &texture->wlr_texture;
+
+error_texture:
+	wl_list_remove(&texture->link);
+	free(texture);
+error_image:
+	wlr_egl_destroy_image(renderer->egl, image);
+error_ctx:
+	wlr_egl_restore_context(&prev_ctx);
+	return NULL;
+}
+//
+// End wl_drm compat
+//
+
 static void destroy_buffer(struct wlr_android_buffer *buffer) {
 	wl_list_remove(&buffer->link);
 	wlr_addon_finish(&buffer->addon);
