@@ -158,6 +158,8 @@ struct wlr_gles2_texture *gles2_get_texture(
 
 struct wlr_texture *gles2_texture_from_buffer(struct wlr_renderer *wlr_renderer,
 	struct wlr_buffer *buffer);
+struct wlr_gles2_texture *gles2_texture_create(
+	struct wlr_gles2_renderer *renderer, uint32_t width, uint32_t height);
 void gles2_texture_destroy(struct wlr_gles2_texture *texture);
 
 void push_gles2_debug_(struct wlr_gles2_renderer *renderer,
