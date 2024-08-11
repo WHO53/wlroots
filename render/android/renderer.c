@@ -5,6 +5,7 @@
 #include "render/egl.h"
 #include "render/gles2.h"
 #include "types/wlr_matrix.h"
+#include "wlr/types/wlr_android_wlegl.h"
 #include <drm_fourcc.h>
 
 static const struct wlr_renderer_impl renderer_impl;
@@ -316,14 +317,7 @@ bool wlr_android_renderer_init_wl_display(struct wlr_renderer *wlr_renderer,
 		struct wl_display *wl_display) {
 	struct wlr_android_renderer *renderer = android_get_renderer(wlr_renderer);
 
-	if (renderer->egl->exts.bind_wayland_display_wl) {
-		if (!wlr_egl_bind_display(renderer->egl, wl_display)) {
-			wlr_log(WLR_ERROR, "Failed to bind wl_display to EGL");
-			return false;
-		}
-	} else {
-		wlr_log(WLR_INFO, "EGL_WL_bind_wayland_display is not supported");
-	}
+	wlr_android_wlegl_create(wl_display, wlr_renderer);
 
 	return true;
 }
