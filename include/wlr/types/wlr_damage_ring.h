@@ -15,7 +15,7 @@
 #include <pixman.h>
 
 /* For triple buffering, a history of two frames is required. */
-#define WLR_DAMAGE_RING_PREVIOUS_LEN 0
+#define WLR_DAMAGE_RING_PREVIOUS_LEN 2
 
 struct wlr_box;
 
