@@ -214,18 +214,16 @@ static void hwcomposer2_present(void *user_data, struct ANativeWindow *window,
 		wlr_log(WLR_ERROR, "prepare: validate failed for display %ld: %d",
 			output->hwc_display_id, error);
 		return;
-	}
-
-	if ((error == HWC2_ERROR_HAS_CHANGES && num_types) || num_requests) {
+	} else if ((error == HWC2_ERROR_HAS_CHANGES && num_types) || num_requests) {
 		wlr_log(WLR_ERROR, "prepare: validate required changes for display %ld: %d",
 			output->hwc_display_id, error);
 		return;
-	}
-
-	error = hwc2_compat_display_accept_changes(hwc_display);
-	if (error != HWC2_ERROR_NONE) {
-		wlr_log(WLR_ERROR, "prepare: acceptChanges failed: %d", error);
-		return;
+	} else if (error == HWC2_ERROR_HAS_CHANGES) {
+		error = hwc2_compat_display_accept_changes(hwc_display);
+		if (error != HWC2_ERROR_NONE) {
+			wlr_log(WLR_ERROR, "prepare: acceptChanges failed: %d", error);
+			return;
+		}
 	}
 
 	hwc2_compat_display_set_client_target(hwc_display, /* slot */0, buffer,
