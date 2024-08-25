@@ -58,6 +58,8 @@ struct wlr_renderer_impl {
 		struct wlr_output *output);
 	int (*get_buffer_age)(struct wlr_renderer *renderer,
 		struct wlr_buffer *buffer);
+	bool (*bind_buffer_for_output)(struct wlr_renderer *renderer,
+		struct wlr_buffer *buffer, struct wlr_output *output);
 };
 
 void wlr_renderer_init(struct wlr_renderer *renderer,

@@ -77,6 +77,15 @@ bool renderer_bind_buffer(struct wlr_renderer *r, struct wlr_buffer *buffer) {
 	return r->impl->bind_buffer(r, buffer);
 }
 
+static bool renderer_bind_buffer_for_output(struct wlr_renderer *r, struct wlr_buffer *buffer,
+		struct wlr_output *output) {
+	assert(!r->rendering);
+	if (!r->impl->bind_buffer_for_output) {
+		return renderer_bind_buffer(r, buffer);
+	}
+	return r->impl->bind_buffer_for_output(r, buffer, output);
+}
+
 bool wlr_renderer_begin(struct wlr_renderer *r, uint32_t width, uint32_t height) {
 	assert(!r->rendering);
 
