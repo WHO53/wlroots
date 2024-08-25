@@ -200,7 +200,7 @@ static const struct wlr_render_pass_impl legacy_impl = {
 };
 
 struct wlr_render_pass *begin_legacy_buffer_render_pass(struct wlr_renderer *renderer,
-		struct wlr_buffer *buffer) {
+		struct wlr_buffer *buffer, struct wlr_output *output) {
 	if (renderer->rendering) {
 		return NULL;
 	}
@@ -215,7 +215,7 @@ struct wlr_render_pass *begin_legacy_buffer_render_pass(struct wlr_renderer *ren
 	pass->width = buffer->width;
 	pass->height = buffer->height;
 
-	if (!wlr_renderer_begin_with_buffer(renderer, buffer)) {
+	if (!wlr_renderer_begin_with_buffer_for_output(renderer, buffer, output)) {
 		free(pass);
 		return NULL;
 	}

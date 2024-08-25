@@ -60,6 +60,9 @@ struct wlr_renderer_impl {
 		struct wlr_buffer *buffer);
 	bool (*bind_buffer_for_output)(struct wlr_renderer *renderer,
 		struct wlr_buffer *buffer, struct wlr_output *output);
+	struct wlr_render_pass *(*begin_buffer_pass_for_output)(struct wlr_renderer *renderer,
+		struct wlr_buffer *buffer, const struct wlr_buffer_pass_options *options,
+		struct wlr_output *output);
 };
 
 void wlr_renderer_init(struct wlr_renderer *renderer,

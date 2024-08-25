@@ -475,7 +475,7 @@ int wlr_renderer_get_drm_fd(struct wlr_renderer *r) {
 struct wlr_render_pass *wlr_renderer_begin_buffer_pass(struct wlr_renderer *renderer,
 		struct wlr_buffer *buffer, const struct wlr_buffer_pass_options *options) {
 	if (!renderer->impl->begin_buffer_pass) {
-		return begin_legacy_buffer_render_pass(renderer, buffer);
+		return begin_legacy_buffer_render_pass(renderer, buffer, NULL);
 	}
 
 	struct wlr_buffer_pass_options default_options = {0};
@@ -484,6 +484,21 @@ struct wlr_render_pass *wlr_renderer_begin_buffer_pass(struct wlr_renderer *rend
 	}
 
 	return renderer->impl->begin_buffer_pass(renderer, buffer, options);
+}
+
+struct wlr_render_pass *wlr_renderer_begin_buffer_pass_for_output(struct wlr_renderer *renderer,
+		struct wlr_buffer *buffer, const struct wlr_buffer_pass_options *options,
+		struct wlr_output *output) {
+	if (!renderer->impl->begin_buffer_pass_for_output) {
+		return begin_legacy_buffer_render_pass(renderer, buffer, output);
+	}
+
+	struct wlr_buffer_pass_options default_options = {0};
+	if (!options) {
+		options = &default_options;
+	}
+
+	return renderer->impl->begin_buffer_pass_for_output(renderer, buffer, options, NULL);
 }
 
 struct wlr_render_timer *wlr_render_timer_create(struct wlr_renderer *renderer) {

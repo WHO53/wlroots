@@ -16,6 +16,7 @@
 
 struct wlr_renderer;
 struct wlr_buffer;
+struct wlr_output;
 
 /**
  * A render pass accumulates drawing operations until submitted to the GPU.
@@ -40,6 +41,14 @@ struct wlr_buffer_pass_options {
  */
 struct wlr_render_pass *wlr_renderer_begin_buffer_pass(struct wlr_renderer *renderer,
 	struct wlr_buffer *buffer, const struct wlr_buffer_pass_options *options);
+
+/**
+ * Same as wlr_renderer_begin_buffer_pass, but for renderers that require
+ * a wlr_output.
+ */
+struct wlr_render_pass *wlr_renderer_begin_buffer_pass_for_output(struct wlr_renderer *renderer,
+	struct wlr_buffer *buffer, const struct wlr_buffer_pass_options *options,
+	struct wlr_output *output);
 
 /**
  * Submit the render pass.

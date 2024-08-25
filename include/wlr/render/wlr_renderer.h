@@ -199,4 +199,10 @@ bool wlr_renderer_set_damage_region(struct wlr_renderer *renderer, pixman_region
 int wlr_renderer_get_buffer_age(struct wlr_renderer *renderer,
 		struct wlr_buffer *buffer);
 
+/**
+ * wlr_renderer_begin_with_buffer variant that looks at the output as well.
+ */
+bool wlr_renderer_begin_with_buffer_for_output(struct wlr_renderer *r,
+	struct wlr_buffer *buffer, struct wlr_output *output);
+
 #endif
