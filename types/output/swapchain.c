@@ -6,6 +6,7 @@
 #include <wlr/util/log.h>
 #include <xf86drm.h>
 
+#include "render/android.h"
 #include "render/drm_format_set.h"
 #include "types/wlr_output.h"
 
@@ -94,7 +95,7 @@ bool wlr_output_configure_primary_swapchain(struct wlr_output *output,
 	}
 
 	wlr_log(WLR_DEBUG, "Testing swapchain for output '%s'", output->name);
-	if (!test_swapchain(output, swapchain, state)) {
+	if (!wlr_renderer_is_android(output->renderer) && !test_swapchain(output, swapchain, state)) {
 		wlr_log(WLR_DEBUG, "Output test failed on '%s', retrying without modifiers",
 			output->name);
 		wlr_swapchain_destroy(swapchain);
