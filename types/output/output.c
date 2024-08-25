@@ -1046,7 +1046,7 @@ bool wlr_output_handle_damage(struct wlr_output *wlr_output, pixman_region32_t *
 	}
 
 	if (wlr_output->needs_frame) {
-		return wlr_renderer_set_damage_region(wlr_output->renderer, damage);
+		return wlr_renderer_set_damage_region(wlr_output->renderer, damage, wlr_output);
 	}
 
 	return true;

@@ -511,11 +511,12 @@ bool wlr_renderer_swap_buffers(struct wlr_renderer *renderer, pixman_region32_t 
 	return renderer->impl->swap_buffers(renderer, damage, output);
 }
 
-bool wlr_renderer_set_damage_region(struct wlr_renderer *renderer, pixman_region32_t *damage) {
+bool wlr_renderer_set_damage_region(struct wlr_renderer *renderer, pixman_region32_t *damage,
+		struct wlr_output *output) {
 	if (!renderer->impl->set_damage_region)
 		return true;
 
-	return renderer->impl->set_damage_region(renderer, damage);
+	return renderer->impl->set_damage_region(renderer, damage, output);
 }
 
 int wlr_renderer_get_buffer_age(struct wlr_renderer *renderer,

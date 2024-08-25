@@ -350,12 +350,13 @@ static bool android_swap_buffers(struct wlr_renderer *wlr_renderer, pixman_regio
 	return true;
 }
 
-static bool android_set_damage_region(struct wlr_renderer *wlr_renderer, pixman_region32_t *damage) {
+static bool android_set_damage_region(struct wlr_renderer *wlr_renderer, pixman_region32_t *damage,
+		struct wlr_output *output) {
 	struct wlr_android_renderer *renderer = android_get_renderer(wlr_renderer);
 
 	struct wlr_android_buffer *buffer, *buffer_tmp;
 	wl_list_for_each_safe(buffer, buffer_tmp, &renderer->buffers, link) {
-		if (!buffer || buffer->egl_surface == EGL_NO_SURFACE)
+		if (!buffer || buffer->egl_surface == EGL_NO_SURFACE || buffer->output != output)
 			continue;
 
 		buffer->is_damaged = wlr_egl_set_damage_region(renderer->egl, buffer->egl_surface, damage);
