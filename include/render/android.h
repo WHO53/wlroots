@@ -6,6 +6,8 @@
 #include <wlr/render/gles2.h>
 #include <wlr/util/addon.h>
 
+struct wlr_output;
+
 struct wlr_android_renderer {
 	struct wlr_renderer *wlr_gles_renderer;
 	struct wlr_renderer wlr_renderer;
@@ -23,6 +25,7 @@ struct wlr_android_buffer {
 	struct wl_list link; // wlr_gles2_renderer.buffers
 
 	EGLSurface egl_surface;
+	struct wlr_output *output;
 	bool is_damaged;
 	int buffer_age;
 

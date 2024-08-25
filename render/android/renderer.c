@@ -6,6 +6,7 @@
 #include "render/gles2.h"
 #include "types/wlr_matrix.h"
 #include "wlr/types/wlr_android_wlegl.h"
+#include "backend/hwcomposer.h"
 #include <drm_fourcc.h>
 
 static const struct wlr_renderer_impl renderer_impl;
@@ -147,7 +148,7 @@ static const struct wlr_addon_interface buffer_addon_impl = {
 };
 
 static struct wlr_android_buffer *get_or_create_buffer(struct wlr_android_renderer *renderer,
-		struct wlr_buffer *wlr_buffer) {
+		struct wlr_buffer *wlr_buffer, struct wlr_output *output) {
 	struct wlr_addon *addon =
 		wlr_addon_find(&wlr_buffer->addons, renderer, &buffer_addon_impl);
 	if (addon) {
@@ -162,13 +163,19 @@ static struct wlr_android_buffer *get_or_create_buffer(struct wlr_android_render
 	}
 	buffer->buffer = wlr_buffer;
 	buffer->renderer = renderer;
+	buffer->output = output;
 
-	if (!renderer->window) {
+	// This is rather bad, as we interwine not only wlr_output here, but
+	// also the platform-specic hwcomposer backend.
+	// This needs to be reworked. Still, this renderer is pretty much only usable
+	// by the hwcomposer backend only anyway.
+	struct wlr_hwcomposer_output *hwc_output = (struct wlr_hwcomposer_output *)output;
+	if (!hwc_output || !hwc_output->egl_window) {
 		wlr_log(WLR_ERROR, "No native window set");
 		buffer->egl_surface = EGL_NO_SURFACE;
 	} else {
 		buffer->egl_surface = eglCreateWindowSurface(renderer->egl->display,
-			renderer->egl->config, renderer->window, NULL);
+			renderer->egl->config, (EGLNativeWindowType)hwc_output->egl_window, NULL);
 		if (buffer->egl_surface == EGL_NO_SURFACE) {
 			wlr_log(WLR_ERROR, "Failed to recreate EGL surface");
 			return NULL;
@@ -197,20 +204,25 @@ static void android_destroy(struct wlr_renderer *wlr_renderer) {
 	renderer->wlr_gles_renderer->impl->destroy(renderer->wlr_gles_renderer);
 }
 
-static bool android_bind_buffer(struct wlr_renderer *wlr_renderer,
-		struct wlr_buffer *wlr_buffer) {
+static bool android_bind_buffer_for_output(struct wlr_renderer *wlr_renderer,
+		struct wlr_buffer *wlr_buffer, struct wlr_output *output) {
 	struct wlr_android_renderer *renderer = android_get_renderer(wlr_renderer);
 
 	if (wlr_buffer == NULL) {
 		return true;
 	}
 
-	struct wlr_android_buffer *buffer = get_or_create_buffer(renderer, wlr_buffer);
+	struct wlr_android_buffer *buffer = get_or_create_buffer(renderer, wlr_buffer, output);
 	if (buffer == NULL) {
 		return false;
 	}
 
 	return wlr_egl_make_current_with_surface(renderer->egl, buffer->egl_surface, &buffer->buffer_age);
+}
+
+static bool android_bind_buffer(struct wlr_renderer *wlr_renderer,
+		struct wlr_buffer *wlr_buffer) {
+	return android_bind_buffer_for_output(wlr_renderer, wlr_buffer, NULL);
 }
 
 static bool android_begin(struct wlr_renderer *wlr_renderer, uint32_t width,
@@ -383,6 +395,7 @@ static int android_get_buffer_age(struct wlr_renderer *wlr_renderer,
 static const struct wlr_renderer_impl renderer_impl = {
 	.destroy = android_destroy,
 	.bind_buffer = android_bind_buffer,
+	.bind_buffer_for_output = android_bind_buffer_for_output,
 	.begin = android_begin,
 	.end = android_end,
 	.clear = android_clear,
