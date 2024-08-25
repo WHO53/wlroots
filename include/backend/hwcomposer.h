@@ -7,9 +7,7 @@
 #include <hardware/hardware.h>
 #include <hardware/hwcomposer.h>
 
-#ifdef HWC_DEVICE_API_VERSION_2_0
 #include <hybris/hwc2/hwc2_compatibility_layer.h>
-#endif
 
 #include "render/drm_format_set.h"
 
@@ -86,9 +84,6 @@ struct hwcomposer_impl {
 };
 
 void hwcomposer_init(struct wlr_hwcomposer_backend *hwc_backend);
-struct wlr_hwcomposer_backend *hwcomposer_api_init(hw_device_t *hwc_device);
-#ifdef HWC_DEVICE_API_VERSION_2_0
 struct wlr_hwcomposer_backend *hwcomposer2_api_init(hw_device_t *hwc_device);
-#endif
 
 #endif

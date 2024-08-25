@@ -21,20 +21,6 @@ void *android_dlopen(const char *filename, int flags);
 void *android_dlsym(void *handle, const char *symbol);
 int android_dlclose(void *handle);
 
-inline static uint32_t interpreted_version(hw_device_t *hwc_device)
-{
-	uint32_t version = hwc_device->version;
-
-	if ((version & 0xffff0000) == 0) {
-		// Assume header version is always 1
-		uint32_t header_version = 1;
-
-		// Legacy version encoding
-		version = (version << 16) | header_version;
-	}
-	return version;
-}
-
 static bool backend_start(struct wlr_backend *wlr_backend) {
 	struct wlr_hwcomposer_backend *hwc_backend =
 		(struct wlr_hwcomposer_backend *)wlr_backend;
@@ -146,49 +132,9 @@ struct wlr_backend *wlr_hwcomposer_backend_create(struct wl_display *display) {
 
 	start_fake_surfaceflinger();
 
-#ifdef HWC_DEVICE_API_VERSION_2_0
 	int hwc_version = HWC_DEVICE_API_VERSION_2_0;
-#else
-	int hwc_version = HWC_DEVICE_API_VERSION_1_3;
-#endif // HWC_DEVICE_API_VERSION_2_0
 
-	// Allow skipping version check via WLR_HWC_SKIP_VERSION_CHECK env variable
-	if (getenv("WLR_HWC_SKIP_VERSION_CHECK") == NULL) {
-		err = hw_get_module(HWC_HARDWARE_MODULE_ID, (const hw_module_t **) &hwc_module);
-
-		if (err == 0) {
-			wlr_log(WLR_INFO, "== hwcomposer module ==\n");
-			wlr_log(WLR_INFO, " * Address: %p\n", hwc_module);
-			wlr_log(WLR_INFO, " * Module API Version: %x\n", hwc_module->module_api_version);
-			wlr_log(WLR_INFO, " * HAL API Version: %x\n", hwc_module->hal_api_version); /* should be zero */
-			wlr_log(WLR_INFO, " * Identifier: %s\n", hwc_module->id);
-			wlr_log(WLR_INFO, " * Name: %s\n", hwc_module->name);
-			wlr_log(WLR_INFO, " * Author: %s\n", hwc_module->author);
-			wlr_log(WLR_INFO, "== hwcomposer module ==\n");
-
-			err = hwc_module->methods->open(hwc_module, HWC_HARDWARE_COMPOSER, &hwc_device);
-		}
-
-		if (!err) {
-#ifdef HWC_DEVICE_API_VERSION_2_0
-			// If there is an error, use the default (hwc2). It seems that on some
-			// hwc2 devices the open call fails.
-			wlr_log(WLR_ERROR, "Unable to determine hwc version. Fallbacking to hwc2");
-			hwc_version = interpreted_version(hwc_device);
-#else
-			// We can't use hwc2_compat_layer, bail out
-			wlr_log(WLR_ERROR, "Unable to determine hwc version.");
-			return NULL;
-#endif // HWC_DEVICE_API_VERSION_2_0
-		}
-	}
-
-#ifdef HWC_DEVICE_API_VERSION_2_0
-	if (hwc_version == HWC_DEVICE_API_VERSION_2_0)
-		hwc_backend = hwcomposer2_api_init(hwc_device);
-	else
-#endif // HWC_DEVICE_API_VERSION_2_0
-		hwc_backend = hwcomposer_api_init(hwc_device);
+	hwc_backend = hwcomposer2_api_init(hwc_device);
 
 	wlr_log(WLR_INFO, "HWC Version=%x\n", hwc_version);
 

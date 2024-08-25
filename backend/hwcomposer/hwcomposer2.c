@@ -18,7 +18,6 @@
 
 #include "backend/hwcomposer.h"
 
-#ifdef HWC_DEVICE_API_VERSION_2_0
 typedef struct
 {
 	struct HWC2EventListener listener;
@@ -329,4 +328,3 @@ const struct hwcomposer_impl hwcomposer_hwc2 = {
 	.destroy_output = hwcomposer2_destroy_output,
 	.close = hwcomposer2_close,
 };
-#endif // HWC_DEVICE_API_VERSION_2_0
