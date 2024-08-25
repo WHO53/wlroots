@@ -66,21 +66,6 @@ static void schedule_frame(struct wlr_hwcomposer_output *output) {
 	}
 }
 
-static void output_set_nativewindow(struct wlr_output *wlr_output) {
-	struct wlr_hwcomposer_output *output =
-		(struct wlr_hwcomposer_output *)wlr_output;
-	struct wlr_hwcomposer_backend *hwc_backend = output->hwc_backend;
-
-	if (!output->egl_window && output->wlr_output.renderer) {
-		output->egl_window = HWCNativeWindowCreate(
-			output->hwc_width, output->hwc_height,
-			HAL_PIXEL_FORMAT_RGBA_8888, hwc_backend->impl->present, output);
-
-		wlr_renderer_set_nativewindow(output->wlr_output.renderer, (EGLNativeWindowType)output->egl_window);
-		wlr_log(WLR_DEBUG, "output_set_nativewindow: nativewindow created");
-	}
-}
-
 static bool output_commit(struct wlr_output *wlr_output,
 		const struct wlr_output_state *state) {
 	struct wlr_hwcomposer_output *output =
@@ -95,9 +80,6 @@ static bool output_commit(struct wlr_output *wlr_output,
 
 	if (state->committed & WLR_OUTPUT_STATE_ENABLED) {
 		wlr_log(WLR_DEBUG, "output_commit: STATE_ENABLE, pending state %d", state->enabled);
-		if (state->enabled)
-			output_set_nativewindow(wlr_output);
-
 		if (!hwc_backend->impl->set_power_mode(output, state->enabled)) {
 			wlr_log(WLR_ERROR, "output_commit: unable to change display power mode");
 			return false;
