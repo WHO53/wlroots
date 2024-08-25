@@ -121,7 +121,7 @@ static bool output_commit(struct wlr_output *wlr_output,
 		}
 
 		if (output->egl_window && output->wlr_output.renderer) {
-			if (!wlr_renderer_swap_buffers(output->wlr_output.renderer, damage)){
+			if (!wlr_renderer_swap_buffers(output->wlr_output.renderer, damage, &output->wlr_output)){
 				wlr_log(WLR_ERROR, "wlr_renderer_swap_buffers failed");
 				return false;
 			}

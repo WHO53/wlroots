@@ -335,12 +335,13 @@ static void android_set_nativewindow(struct wlr_renderer *wlr_renderer, EGLNativ
 	renderer->window = window;
 }
 
-static bool android_swap_buffers(struct wlr_renderer *wlr_renderer, pixman_region32_t *damage) {
+static bool android_swap_buffers(struct wlr_renderer *wlr_renderer, pixman_region32_t *damage,
+		struct wlr_output *output) {
 	struct wlr_android_renderer *renderer = android_get_renderer(wlr_renderer);
 
 	struct wlr_android_buffer *buffer, *buffer_tmp;
 	wl_list_for_each_safe(buffer, buffer_tmp, &renderer->buffers, link) {
-		if (!buffer || buffer->egl_surface == EGL_NO_SURFACE)
+		if (!buffer || buffer->egl_surface == EGL_NO_SURFACE || buffer->output != output)
 			continue;
 
 		return wlr_egl_swap_buffers(renderer->egl, buffer->egl_surface, buffer->is_damaged ? damage : NULL);

@@ -22,6 +22,7 @@ struct wlr_drm_format_set;
 struct wlr_buffer;
 struct wlr_box;
 struct wlr_fbox;
+struct wlr_output;
 
 /**
  * A renderer for basic 2D operations.
@@ -183,7 +184,8 @@ void wlr_renderer_set_nativewindow(struct wlr_renderer *renderer, EGLNativeWindo
 /**
  * Swap buffers.
  */
-bool wlr_renderer_swap_buffers(struct wlr_renderer *renderer, pixman_region32_t *damage);
+bool wlr_renderer_swap_buffers(struct wlr_renderer *renderer, pixman_region32_t *damage,
+	struct wlr_output *output);
 
 /**
  * Set damage region.
