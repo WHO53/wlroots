@@ -110,6 +110,15 @@ bool wlr_renderer_begin_with_buffer(struct wlr_renderer *r,
 	return true;
 }
 
+bool wlr_renderer_begin_with_buffer_for_output(struct wlr_renderer *r,
+		struct wlr_buffer *buffer, struct wlr_output *output) {
+	if (output && r->impl->bind_buffer_for_output && !renderer_bind_buffer_for_output(r, buffer, output)) {
+		return false;
+	}
+
+	return wlr_renderer_begin_with_buffer(r, buffer);
+}
+
 void wlr_renderer_end(struct wlr_renderer *r) {
 	assert(r->rendering);
 
