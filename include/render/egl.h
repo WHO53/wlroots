@@ -144,9 +144,6 @@ bool wlr_egl_swap_buffers(struct wlr_egl *egl, EGLSurface surface,
  * calling wlr_egl_unset_current().
  */
 bool wlr_egl_make_current_with_surface(struct wlr_egl *egl, EGLSurface surface, int *buffer_age);
-bool wlr_egl_make_current(struct wlr_egl *egl);
-
-bool wlr_egl_unset_current(struct wlr_egl *egl);
 
 bool wlr_egl_is_current(struct wlr_egl *egl);
 

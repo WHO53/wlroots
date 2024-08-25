@@ -53,4 +53,8 @@ EGLDisplay wlr_egl_get_display(struct wlr_egl *egl);
  */
 EGLContext wlr_egl_get_context(struct wlr_egl *egl);
 
+bool wlr_egl_make_current(struct wlr_egl *egl);
+
+bool wlr_egl_unset_current(struct wlr_egl *egl);
+
 #endif
