@@ -11,6 +11,7 @@
 #include "render/drm_format_set.h"
 #include "render/wlr_renderer.h"
 #include "render/pixel_format.h"
+#include "render/android.h"
 #include "types/wlr_output.h"
 
 bool wlr_output_init_render(struct wlr_output *output,
@@ -126,6 +127,11 @@ static struct wlr_buffer *output_acquire_empty_buffer(struct wlr_output *output,
 bool output_ensure_buffer(struct wlr_output *output,
 		struct wlr_output_state *state, bool *new_buffer) {
 	assert(*new_buffer == false);
+
+	// On Android, always return true
+	if (wlr_renderer_is_android(output->renderer)) {
+		return true;
+	}
 
 	// If we already have a buffer, we don't need to allocate a new one
 	if (state->committed & WLR_OUTPUT_STATE_BUFFER) {
