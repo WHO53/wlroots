@@ -11,6 +11,7 @@
 #include <wlr/util/log.h>
 #include <wlr/util/region.h>
 #include "render/allocator/allocator.h"
+#include "render/android.h"
 #include "types/wlr_output.h"
 #include "util/env.h"
 #include "util/global.h"
@@ -313,7 +314,7 @@ static void output_apply_state(struct wlr_output *output,
 		WLR_OUTPUT_STATE_SUBPIXEL);
 
 	// Destroy the swapchains when an output is disabled
-	if ((state->committed & WLR_OUTPUT_STATE_ENABLED) && !state->enabled) {
+	if (!wlr_renderer_is_android(output->renderer) && (state->committed & WLR_OUTPUT_STATE_ENABLED) && !state->enabled) {
 		wlr_swapchain_destroy(output->swapchain);
 		output->swapchain = NULL;
 		wlr_swapchain_destroy(output->cursor_swapchain);
