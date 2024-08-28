@@ -12,6 +12,9 @@
 static const struct wlr_renderer_impl renderer_impl;
 
 bool wlr_renderer_is_android(struct wlr_renderer *wlr_renderer) {
+	if (!wlr_renderer) {
+		return false;
+	}
 	return wlr_renderer->impl == &renderer_impl;
 }
 
