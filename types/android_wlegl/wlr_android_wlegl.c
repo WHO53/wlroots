@@ -41,6 +41,7 @@
 int hybris_gralloc_allocate(int width, int height, int format, int usage, buffer_handle_t *handle,
 	uint32_t *stride);
 int hybris_gralloc_release(buffer_handle_t handle, int was_allocated);
+int hybris_gralloc_import_buffer(buffer_handle_t raw_handle, buffer_handle_t* out_handle);
 
 static void buffer_handle_release(struct wl_listener *listener, void *data) {
 	struct wlr_android_wlegl_buffer *buffer = wl_container_of(listener, buffer, release);
@@ -98,11 +99,10 @@ static void server_wlegl_buffer_destroy(struct wl_resource *resource)
 	wlr_buffer_drop(&buffer->base);
 }
 
-static struct wlr_android_wlegl_buffer * server_wlegl_buffer_create_server(struct wl_client *client, int32_t width,
-	int32_t height, int32_t stride, int32_t format, int32_t usage,
-	buffer_handle_t handle,
-	struct wlr_android_wlegl *android_wlegl)
-{
+static struct wlr_android_wlegl_buffer *server_wlegl_buffer_init(struct wl_client *client, uint32_t id,
+		int32_t width, int32_t height, int32_t stride, int32_t format,
+		int32_t usage, buffer_handle_t handle,
+		struct wlr_android_wlegl *android_wlegl) {
 	struct wlr_android_wlegl_buffer *buffer = calloc(1, sizeof(*buffer));
 
 	wlr_buffer_init(&buffer->base, &buffer_impl, width, height);
@@ -110,7 +110,7 @@ static struct wlr_android_wlegl_buffer * server_wlegl_buffer_create_server(struc
 	buffer->base.accessing_data_ptr = false;
 
 	buffer->inner.android_wlegl = android_wlegl;
-	buffer->inner.resource = wl_resource_create(client, &wl_buffer_interface, 1, 0);
+	buffer->inner.resource = wl_resource_create(client, &wl_buffer_interface, 1, id);
 	wl_resource_set_implementation(buffer->inner.resource, &wl_buffer_impl, &buffer->inner, server_wlegl_buffer_destroy);
 
 	buffer->inner.native_buffer = calloc(1, sizeof(*buffer->inner.native_buffer));
@@ -137,14 +137,144 @@ static struct wlr_android_wlegl_buffer * server_wlegl_buffer_create_server(struc
 	return buffer;
 }
 
-static void android_wlegl_create_handle(struct wl_client *client, struct wl_resource *resource, uint32_t id, int32_t num_fds, struct wl_array *ints) {
-	wlr_log(WLR_ERROR, "create handle called: this is not supported by this implementation!");
+static struct wlr_android_wlegl_buffer *server_wlegl_buffer_create_server(struct wl_client *client, int32_t width,
+	int32_t height, int32_t stride, int32_t format, int32_t usage,
+	buffer_handle_t handle,
+	struct wlr_android_wlegl *android_wlegl) {
+	return server_wlegl_buffer_init(client, 0, width, height, stride, format, usage,
+		handle, android_wlegl);
+}
+
+static struct wlr_android_wlegl_buffer *server_wlegl_buffer_create(struct wl_client *client, uint32_t id,
+	int32_t width, int32_t height, int32_t stride, int32_t format, int32_t usage,
+	buffer_handle_t handle, struct wlr_android_wlegl *android_wlegl) {
+	const native_handle_t* out_handle = NULL;
+	if (hybris_gralloc_import_buffer(handle, &out_handle)) {
+		return NULL;
+	}
+
+	return server_wlegl_buffer_init(client, id, width, height, stride, format, usage,
+		out_handle, android_wlegl);
+}
+
+static void handle_add_fd(struct wl_client *client, struct wl_resource *resource, int32_t fd) {
+	struct wlr_android_wlegl_handle *handle = (struct wlr_android_wlegl_handle *)(resource->data);
+
+	if (handle->fds.size >= handle->num_fds * sizeof(int)) {
+		close(fd);
+		wl_resource_post_error(&handle->resource,
+			ANDROID_WLEGL_HANDLE_ERROR_TOO_MANY_FDS,
+			"too many file descriptors");
+		return;
+	}
+
+	int *ptr = (int *)wl_array_add(&handle->fds, sizeof(int));
+	*ptr = fd;
+}
+
+static void handle_destroy(struct wl_client *client, struct wl_resource *resource)
+{
+	wl_resource_destroy(resource);
+}
+
+static const struct android_wlegl_handle_interface server_handle_impl = {
+	.add_fd = handle_add_fd,
+	.destroy = handle_destroy,
+};
+
+static void android_wlegl_handle_destroy(struct wl_resource *resource) {
+	struct wlr_android_wlegl_handle *handle = (struct wlr_android_wlegl_handle *)(resource->data);
+
+	int *fd = (int *)handle->fds.data;
+	int *end = (int *)((char *)handle->fds.data + handle->fds.size);
+
+	for (; fd < end; ++fd)
+		close(*fd);
+
+	wl_array_release(&handle->fds);
+	wl_array_release(&handle->ints);
+
+	free(handle);
+}
+
+static void android_wlegl_create_handle(struct wl_client *client, struct wl_resource *resource,
+		uint32_t id, int32_t num_fds, struct wl_array *ints) {
+	struct wlr_android_wlegl_handle *handle;
+	if (num_fds < 0) {
+		wl_resource_post_error(resource, ANDROID_WLEGL_ERROR_BAD_VALUE, "negative num_fds: %d", num_fds);
+		return;
+	}
+
+	handle = calloc(1, sizeof(*handle));
+	handle->resource.object.id = id;
+	handle->resource.object.interface = &android_wlegl_handle_interface;
+	handle->resource.object.implementation =
+		(void (**)(void))&server_handle_impl;
+
+	handle->resource.destroy = android_wlegl_handle_destroy;
+	handle->resource.data = handle;
+	handle->num_fds = num_fds;
+
+	wl_array_init(&handle->ints);
+	wl_array_init(&handle->fds);
+	wl_array_copy(&handle->ints, ints);
+	wl_client_add_resource(client, &handle->resource);
+}
+
+static buffer_handle_t server_wlegl_handle_to_native(struct wlr_android_wlegl_handle *handle) {
+	native_handle_t *native;
+	int numFds = handle->fds.size / sizeof(int);
+	int numInts = handle->ints.size / sizeof(int32_t);
+
+	if (numFds != handle->num_fds)
+		return NULL;
+
+	native = native_handle_create(numFds, numInts);
+
+	memcpy(&native->data[0], handle->fds.data, handle->fds.size);
+	memcpy(&native->data[numFds], handle->ints.data, handle->ints.size);
+	/* ownership of fds passed to native_handle_t */
+	handle->fds.size = 0;
+
+	return (buffer_handle_t) native;
 }
 
 static void android_wlegl_create_buffer(struct wl_client *client, struct wl_resource *resource,
 		    uint32_t id, int32_t width, int32_t height, int32_t stride,
-		    int32_t format, int32_t usage, struct wl_resource *handle) {
-	wlr_log(WLR_ERROR, "create buffer called: this is not supported by this implementation!");
+		    int32_t format, int32_t usage, struct wl_resource *wl_handle) {
+	struct wlr_android_wlegl *android_wlegl = (struct wlr_android_wlegl *)(resource->data);
+	struct wlr_android_wlegl_handle *handle = (struct wlr_android_wlegl_handle *)(wl_handle->data);
+	struct wlr_android_wlegl_buffer *buffer;
+	buffer_handle_t native;
+
+	if (width < 1 || height < 1) {
+		wl_resource_post_error(resource,
+			ANDROID_WLEGL_ERROR_BAD_VALUE,
+			"bad width (%d) or height (%d)",
+			width, height);
+		return;
+	}
+
+	native = server_wlegl_handle_to_native(handle);
+	if (!native) {
+		wl_resource_post_error(resource,
+			ANDROID_WLEGL_ERROR_BAD_HANDLE,
+			"fd count mismatch");
+		return;
+	}
+
+	buffer = server_wlegl_buffer_create(client, id, width, height, stride,
+					    format, usage, native, android_wlegl);
+	// hybris_gralloc_import_buffer copied the raw handle
+	native_handle_close((native_handle_t *)native);
+	native_handle_delete((native_handle_t *)native);
+
+	if (!buffer) {
+		wl_resource_post_error(resource,
+			ANDROID_WLEGL_ERROR_BAD_HANDLE,
+			"invalid native handle");
+		return;
+	}
 }
 
 /* Ref: libhybris/hybris/platforms/common/server_wlegl.cpp */

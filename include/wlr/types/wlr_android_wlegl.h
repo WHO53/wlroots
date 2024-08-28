@@ -51,6 +51,15 @@ struct wlr_android_wlegl_buffer {
 	struct wl_listener release;
 };
 
+struct wlr_android_wlegl_handle {
+	struct wl_resource resource;
+
+	struct wl_array ints;
+	struct wl_array fds;
+	int num_fds;
+	int num_ints;
+};
+
 struct wlr_android_wlegl {
 	struct wl_global *global;
 
