@@ -383,10 +383,12 @@ static int android_get_buffer_age(struct wlr_renderer *wlr_renderer,
 		wlr_addon_find(&wlr_buffer->addons, renderer, &buffer_addon_impl);
 	if (addon) {
 		struct wlr_android_buffer *buffer = wl_container_of(addon, buffer, addon);
-		return buffer->buffer_age;
+		// TODO: try to investigate why
+		return buffer->buffer_age + 1;
 	}
 
-	return -1;
+	// always assume we support buffer_age
+	return 0;
 }
 
 static const struct wlr_renderer_impl renderer_impl = {
