@@ -266,6 +266,7 @@ struct wlr_output *wlr_hwcomposer_add_output(struct wlr_backend *wlr_backend,
 	output->egl_window = HWCNativeWindowCreate(
 		output->hwc_width, output->hwc_height,
 		HAL_PIXEL_FORMAT_RGBA_8888, hwc_backend->impl->present, output);
+	HWCNativeWindowSetBufferCount(output->egl_window, 3);
 
 	struct wl_event_loop *ev = wl_display_get_event_loop(hwc_backend->display);
 	output->vsync_timer = wl_event_loop_add_timer(ev, on_vsync_timer_elapsed, output);
