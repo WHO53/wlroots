@@ -421,14 +421,14 @@ static bool egl_init_display(struct wlr_egl *egl, EGLDisplay display, bool is_an
 		}
 	}
 
-	if (!check_egl_ext(display_exts_str, "EGL_KHR_no_config_context") &&
+	if (!is_android && !check_egl_ext(display_exts_str, "EGL_KHR_no_config_context") &&
 			!check_egl_ext(display_exts_str, "EGL_MESA_configless_context")) {
 		wlr_log(WLR_ERROR, "EGL_KHR_no_config_context or "
 			"EGL_MESA_configless_context not supported");
 		return false;
 	}
 
-	if (!check_egl_ext(display_exts_str, "EGL_KHR_surfaceless_context")) {
+	if (!is_android && !check_egl_ext(display_exts_str, "EGL_KHR_surfaceless_context")) {
 		wlr_log(WLR_ERROR, "EGL_KHR_surfaceless_context not supported");
 		return false;
 	}
