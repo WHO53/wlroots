@@ -4,7 +4,12 @@ android_headers = dependency(
 	required: 'hwcomposer' in backends,
 )
 
-if not (android_headers.found())
+libdroid = dependency(
+	'libdroid-0',
+	required: 'hwcomposer' in backends,
+)
+
+if not (android_headers.found()) or not (libdroid.found())
 	subdir_done()
 endif
 
@@ -15,4 +20,4 @@ wlr_files += files(
 )
 
 features += { 'hwcomposer-backend': true }
-wlr_deps += android_headers
+wlr_deps += [android_headers, libdroid]
