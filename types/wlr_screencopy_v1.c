@@ -4,6 +4,7 @@
 #include <wlr/interfaces/wlr_output.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
+#include <wlr/render/android.h>
 #include <wlr/types/wlr_matrix.h>
 #include <wlr/types/wlr_screencopy_v1.h>
 #include <wlr/backend.h>
@@ -314,7 +315,8 @@ static void frame_handle_output_commit(struct wl_listener *listener,
 		abort(); // unreachable
 	}
 
-	zwlr_screencopy_frame_v1_send_flags(frame->resource, 0);
+	zwlr_screencopy_frame_v1_send_flags(frame->resource,  wlr_renderer_is_android(renderer) ?
+		ZWLR_SCREENCOPY_FRAME_V1_FLAGS_Y_INVERT : 0);
 	frame_send_damage(frame);
 	frame_send_ready(frame, event->when);
 	frame_destroy(frame);
